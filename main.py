@@ -1,13 +1,14 @@
-# Version: 2.1
-# Doble selector de zona (Inicio / Finalización) + carga y filtro de cross_stats.csv
-# Sistema de ejes: (0,0) abajo-izq; X→derecha; Y→arriba
+# Version: 2.2
+# Doble selector (Inicio/Final), botón para mostrar/ocultar selector,
+# filtro combinado/único y head del DF filtrado + funnel desde charts_cross.py
 
 import os, base64
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
+from charts_cross import funnel_por_tipo  # <- módulo externo con funciones de gráficos
 
-st.set_page_config(page_title="Zonas Inicio/Final + Filtro DF", page_icon="⚽", layout="wide")
+st.set_page_config(page_title="Zonas Inicio/Final + Filtro + Gráficas", page_icon="⚽", layout="wide")
 
 # ---------- cargar imagen 'pitch_opta' ----------
 CANDIDATES_IMG = ["pitch_opta.png", "pitch_opta.jpg", "pitch_opta.jpeg"]
@@ -28,16 +29,18 @@ if "zone_inicio" not in st.session_state:
     st.session_state.zone_inicio = None
 if "zone_final" not in st.session_state:
     st.session_state.zone_final = None
+if "show_selector" not in st.session_state:
+    st.session_state.show_selector = False
 
 # ---------- figura base ----------
 def build_fig(zone=None):
     fig = go.Figure()
     fig.update_layout(
-        height=620,
+        height=520,
         margin=dict(l=10, r=10, t=10, b=10),
         xaxis=dict(range=[0,100], visible=False, scaleanchor="y", scaleratio=1),
-        yaxis=dict(range=[0,100], visible=False),   # Y crece hacia arriba
-        dragmode="select"                           # arrastrar = box select
+        yaxis=dict(range=[0,100], visible=False),   # (0,0) abajo-izq; Y↑
+        dragmode="select"
     )
     fig.add_layout_image(dict(
         source=image_data_url(IMG_PATH),
@@ -47,7 +50,7 @@ def build_fig(zone=None):
         sizing="stretch",
         layer="below"
     ))
-    # malla de puntos “fantasma” para que el box-select emita eventos
+    # malla de puntos "fantasma" para que el box-select emita eventos
     step = 1
     xs = [xx for xx in range(0,101,step) for _ in range(0,101,step)]
     ys = [yy for _ in range(0,101,step) for yy in range(0,101,step)]
@@ -67,10 +70,8 @@ def build_fig(zone=None):
         )
     return fig
 
-# ---------- captura de selección (box select) ----------
-def select_zone_ui(title: str, state_key: str, widget_key: str):
-    st.markdown(f"### {title}")
-    fig = build_fig(st.session_state.get(state_key))
+def capture_box(fig, widget_key: str):
+    """Devuelve dict con x0,x1,y0,y1 (o None) usando box select."""
     try:
         from streamlit_plotly_events2 import plotly_events
     except Exception:
@@ -79,42 +80,32 @@ def select_zone_ui(title: str, state_key: str, widget_key: str):
     selected = plotly_events(
         fig,
         select_event=True, click_event=False, hover_event=False,
-        override_width="100%", override_height=620,
+        override_width="100%", override_height=520,
         key=widget_key
     )
+    if not selected:
+        return None
 
-    # parsear selección -> bounding box
-    if selected:
-        if isinstance(selected, list) and selected and isinstance(selected[0], dict) and "x" in selected[0]:
-            pts = selected
-        elif isinstance(selected[-1], dict) and "points" in selected[-1]:
-            pts = selected[-1]["points"]
-        else:
-            pts = []
+    # lista de puntos o dict con 'points'
+    if isinstance(selected, list) and selected and isinstance(selected[0], dict) and "x" in selected[0]:
+        pts = selected
+    elif isinstance(selected[-1], dict) and "points" in selected[-1]:
+        pts = selected[-1]["points"]
+    else:
+        pts = []
 
-        if pts:
-            xs = [float(p["x"]) for p in pts]
-            ys = [float(p["y"]) for p in pts]
-            x0, x1 = min(xs), max(xs)
-            y0, y1 = min(ys), max(ys)
-            clamp = lambda v: max(0.0, min(100.0, v))
-            st.session_state[state_key] = {
-                "x0": round(clamp(x0), 2), "x1": round(clamp(x1), 2),
-                "y0": round(clamp(y0), 2), "y1": round(clamp(y1), 2),
-            }
+    if not pts:
+        return None
 
-    # outputs y acciones
-    z = st.session_state.get(state_key)
-    col1, col2 = st.columns([1.4, 1])
-    with col1:
-        if z:
-            st.success(f"{title}: x0={z['x0']}  x1={z['x1']}  •  y0={z['y0']}  y1={z['y1']}")
-        else:
-            st.info("Arrastrá un rectángulo para capturar la zona.")
-    with col2:
-        if st.button(f"🧹 Limpiar {title}", key=f"clear_{state_key}"):
-            st.session_state[state_key] = None
-            st.rerun()
+    xs = [float(p["x"]) for p in pts]
+    ys = [float(p["y"]) for p in pts]
+    x0, x1 = min(xs), max(xs)
+    y0, y1 = min(ys), max(ys)
+    clamp = lambda v: max(0.0, min(100.0, v))
+    return {
+        "x0": round(clamp(x0), 2), "x1": round(clamp(x1), 2),
+        "y0": round(clamp(y0), 2), "y1": round(clamp(y1), 2),
+    }
 
 # ---------- carga del CSV ----------
 def load_cross_stats():
@@ -124,73 +115,75 @@ def load_cross_stats():
         st.error("No encontré 'cross_stats.csv' (probé en raíz, /data y /dataset).")
         return None
     df = pd.read_csv(path)
-    # asegurar tipos numéricos en las columnas que filtramos
+    # asegurar tipos numéricos en posiciones
     for c in ["x", "y", "endX", "endY"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
 
-# ---------- filtros ----------
-def apply_inicio_filter(df: pd.DataFrame, zi: dict):
-    if df is None or zi is None:
-        return df
-    req_cols = {"x", "y"}
-    if not req_cols.issubset(df.columns):
-        st.warning("El DF no tiene columnas 'x' y 'y' para filtrar por INICIO.")
-        return df
-    x0, x1, y0, y1 = zi["x0"], zi["x1"], zi["y0"], zi["y1"]
-    return df[df["x"].between(x0, x1) & df["y"].between(y0, y1)]
-
-def apply_final_filter(df: pd.DataFrame, zf: dict):
-    if df is None or zf is None:
-        return df
-    req_cols = {"endX", "endY"}
-    if not req_cols.issubset(df.columns):
-        st.warning("El DF no tiene columnas 'endX' y 'endY' para filtrar por FINALIZACIÓN.")
-        return df
-    x0, x1, y0, y1 = zf["x0"], zf["x1"], zf["y0"], zf["y1"]
-    return df[df["endX"].between(x0, x1) & df["endY"].between(y0, y1)]
+def apply_filters(df: pd.DataFrame, zi: dict | None, zf: dict | None):
+    """Combinado si hay ambos; si hay uno, sólo ese; si ninguno, devuelve df."""
+    if df is None:
+        return None
+    filt = df
+    if zi:
+        filt = filt[filt["x"].between(zi["x0"], zi["x1"]) & filt["y"].between(zi["y0"], zi["y1"])]
+    if zf:
+        filt = filt[filt["endX"].between(zf["x0"], zf["x1"]) & filt["endY"].between(zf["y0"], zf["y1"])]
+    return filt
 
 # ---------- UI ----------
-st.title("Zonas de INICIO y FINALIZACIÓN de centro + filtro de cross_stats")
-st.caption("Ejes: (0,0) abajo-izq • X→derecha • Y→arriba")
+st.title("Zonas de INICIO y FINALIZACIÓN + filtro combinado + gráficas")
 
-c1, c2 = st.columns(2, gap="large")
-with c1:
-    select_zone_ui("Inicio de centro", "zone_inicio", "pitch_inicio")
-with c2:
-    select_zone_ui("Finalización de centro", "zone_final", "pitch_final")
+# Botón para mostrar/ocultar selector
+btn_label = "Seleccionar Zona Análisis" if not st.session_state.show_selector else "Ocultar Selector de Zonas"
+if st.button(btn_label):
+    st.session_state.show_selector = not st.session_state.show_selector
+
+# Selector (sólo visible si está activo)
+if st.session_state.show_selector:
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        st.markdown("### Inicio de centro")
+        fig_i = build_fig(st.session_state.zone_inicio)
+        zone_i = capture_box(fig_i, "pitch_inicio")
+        if zone_i:
+            st.session_state.zone_inicio = zone_i
+        z = st.session_state.zone_inicio
+        st.write("Zona inicio:", z if z else "—")
+        if st.button("🧹 Limpiar inicio"):
+            st.session_state.zone_inicio = None
+            st.rerun()
+    with c2:
+        st.markdown("### Finalización de centro")
+        fig_f = build_fig(st.session_state.zone_final)
+        zone_f = capture_box(fig_f, "pitch_final")
+        if zone_f:
+            st.session_state.zone_final = zone_f
+        z = st.session_state.zone_final
+        st.write("Zona finalización:", z if z else "—")
+        if st.button("🧹 Limpiar finalización"):
+            st.session_state.zone_final = None
+            st.rerun()
 
 st.divider()
-st.subheader("Validación rápida con cross_stats.csv")
 
+# Cargar DF y aplicar filtro
 df = load_cross_stats()
 if df is not None:
-    zi = st.session_state.zone_inicio
-    zf = st.session_state.zone_final
+    zi, zf = st.session_state.zone_inicio, st.session_state.zone_final
+    df_scope = apply_filters(df, zi, zf)
 
-    # filtrados
-    df_inicio = apply_inicio_filter(df, zi) if zi else None
-    df_final  = apply_final_filter(df, zf) if zf else None
-    df_both   = df.copy()
-    if zi: df_both = apply_inicio_filter(df_both, zi)
-    if zf: df_both = apply_final_filter(df_both, zf)
+    st.subheader("Validación del filtro (head)")
+    st.caption(f"Filas resultantes: {len(df_scope)} de {len(df)}")
+    st.dataframe(df_scope.head(), use_container_width=True, hide_index=True)
 
-    # mostrar heads
-    with st.expander("DF original (head)", expanded=False):
-        st.dataframe(df.head(), use_container_width=True, hide_index=True)
+    st.divider()
+    st.subheader("Gráficas (sobre el DF filtrado si hay filtro, o sobre el total)")
 
-    if zi is not None:
-        with st.expander("Filtrado por INICIO (x,y) — head", expanded=True):
-            st.caption(f"Filas: {0 if df_inicio is None else len(df_inicio)}")
-            st.dataframe((df_inicio.head() if df_inicio is not None else pd.DataFrame()), use_container_width=True, hide_index=True)
-    if zf is not None:
-        with st.expander("Filtrado por FINALIZACIÓN (endX,endY) — head", expanded=True):
-            st.caption(f"Filas: {0 if df_final is None else len(df_final)}")
-            st.dataframe((df_final.head() if df_final is not None else pd.DataFrame()), use_container_width=True, hide_index=True)
-    if zi is not None or zf is not None:
-        with st.expander("Filtrado COMBINADO (aplica INICIO y FINAL si existen) — head", expanded=True):
-            st.caption(f"Filas: {len(df_both)}")
-            st.dataframe(df_both.head(), use_container_width=True, hide_index=True)
-else:
-    st.info("Cuando el CSV esté disponible, se mostrará aquí el head y los filtrados.")
+    # Funnel Abierto vs Cerrado
+    try:
+        fig_funnel = funnel_por_tipo(df_scope, open_label="Abierto", closed_label="Cerrado")
+        st.plotly_chart(fig_funnel, use_container_width=True)
+    except Exception as e:
+        st.warning(f"No se pudo construir el funnel: {e}")
