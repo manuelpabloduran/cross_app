@@ -1,14 +1,14 @@
-# Version: 2.2
-# Doble selector (Inicio/Final), botón para mostrar/ocultar selector,
-# filtro combinado/único y head del DF filtrado + funnel desde charts_cross.py
+# Version: 2.3
+# Filtros generales (panel izq) + doble selector opcional + filtro combinado/único
+# y gráficas sobre df_scope. Requiere charts_cross.py (funnel_por_tipo).
 
 import os, base64
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
-from chart_cross import funnel_por_tipo  # <- módulo externo con funciones de gráficos
+from charts_cross import funnel_por_tipo  # funciones de gráficos
 
-st.set_page_config(page_title="Zonas Inicio/Final + Filtro + Gráficas", page_icon="⚽", layout="wide")
+st.set_page_config(page_title="Análisis de Centros • Filtros + Zonas", page_icon="⚽", layout="wide")
 
 # ---------- cargar imagen 'pitch_opta' ----------
 CANDIDATES_IMG = ["pitch_opta.png", "pitch_opta.jpg", "pitch_opta.jpeg"]
@@ -25,14 +25,26 @@ def image_data_url(path: str) -> str:
     return f"data:image/{mime};base64,{b64}"
 
 # ---------- estado ----------
-if "zone_inicio" not in st.session_state:
-    st.session_state.zone_inicio = None
-if "zone_final" not in st.session_state:
-    st.session_state.zone_final = None
-if "show_selector" not in st.session_state:
-    st.session_state.show_selector = False
+ss = st.session_state
+ss.setdefault("zone_inicio", None)
+ss.setdefault("zone_final", None)
+ss.setdefault("show_selector", False)
 
-# ---------- figura base ----------
+# ---------- carga del CSV ----------
+def load_cross_stats():
+    candidates = ["cross_stats.csv", "data/cross_stats.csv", "dataset/cross_stats.csv"]
+    path = next((p for p in candidates if os.path.exists(p)), None)
+    if path is None:
+        st.error("No encontré 'cross_stats.csv' (probé en raíz, /data y /dataset).")
+        return None
+    df = pd.read_csv(path)
+    # asegurar tipos numéricos
+    for c in ["x", "y", "endX", "endY", "xg_corrected"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+# ---------- figura base (pitch con box-select) ----------
 def build_fig(zone=None):
     fig = go.Figure()
     fig.update_layout(
@@ -50,7 +62,7 @@ def build_fig(zone=None):
         sizing="stretch",
         layer="below"
     ))
-    # malla de puntos "fantasma" para que el box-select emita eventos
+    # malla de puntos “fantasma” para que el box-select emita eventos
     step = 1
     xs = [xx for xx in range(0,101,step) for _ in range(0,101,step)]
     ys = [yy for _ in range(0,101,step) for yy in range(0,101,step)]
@@ -85,103 +97,176 @@ def capture_box(fig, widget_key: str):
     )
     if not selected:
         return None
-
-    # lista de puntos o dict con 'points'
     if isinstance(selected, list) and selected and isinstance(selected[0], dict) and "x" in selected[0]:
         pts = selected
     elif isinstance(selected[-1], dict) and "points" in selected[-1]:
         pts = selected[-1]["points"]
     else:
         pts = []
-
     if not pts:
         return None
-
     xs = [float(p["x"]) for p in pts]
     ys = [float(p["y"]) for p in pts]
     x0, x1 = min(xs), max(xs)
     y0, y1 = min(ys), max(ys)
     clamp = lambda v: max(0.0, min(100.0, v))
-    return {
-        "x0": round(clamp(x0), 2), "x1": round(clamp(x1), 2),
-        "y0": round(clamp(y0), 2), "y1": round(clamp(y1), 2),
-    }
+    return {"x0": round(clamp(x0), 2), "x1": round(clamp(x1), 2),
+            "y0": round(clamp(y0), 2), "y1": round(clamp(y1), 2)}
 
-# ---------- carga del CSV ----------
-def load_cross_stats():
-    candidates = ["cross_stats.csv", "data/cross_stats.csv", "dataset/cross_stats.csv"]
-    path = next((p for p in candidates if os.path.exists(p)), None)
-    if path is None:
-        st.error("No encontré 'cross_stats.csv' (probé en raíz, /data y /dataset).")
+# ---------- filtros generales (panel izquierdo) ----------
+FILTER_KEYS = {
+    "team": "TeamName",
+    "rival": "TeamRival",
+    "temporada": "Temporada",
+    "competencia": "Competencia",
+    "finalizacion": "ultimo_event_name",
+    "xg": "xg_corrected",
+}
+
+def general_filter_panel(df: pd.DataFrame):
+    st.markdown("### Filtros generales")
+    selected = {}
+    # Helper para multiselect seguro
+    def ms(label, colname, key):
+        if colname in df.columns:
+            opts = sorted([x for x in df[colname].dropna().unique().tolist()])
+            val = st.multiselect(label, options=opts, default=[], key=key)
+            selected[key] = (colname, val)
+        else:
+            st.caption(f"— columna no encontrada: **{colname}**")
+            selected[key] = (None, [])
+    # Multiselects
+    ms("Equipo", FILTER_KEYS["team"], "flt_team")
+    ms("Rival", FILTER_KEYS["rival"], "flt_rival")
+    ms("Temporada", FILTER_KEYS["temporada"], "flt_temporada")
+    ms("Competencia", FILTER_KEYS["competencia"], "flt_competencia")
+    ms("Finalización (ultimo_event_name)", FILTER_KEYS["finalizacion"], "flt_final")
+
+    # Slider xG
+    xg_col = FILTER_KEYS["xg"]
+    if xg_col in df.columns:
+        xg_series = df[xg_col].dropna()
+        if len(xg_series):
+            xg_min = float(xg_series.min())
+            xg_max = float(xg_series.max())
+            # inicializar default del slider
+            ss.setdefault("flt_xg_default", (xg_min, xg_max))
+            rng = st.slider(
+                "Rango xG (xg_corrected)",
+                min_value=xg_min, max_value=xg_max,
+                value=ss.get("flt_xg", ss["flt_xg_default"]),
+                step=0.01, key="flt_xg"
+            )
+            selected["flt_xg"] = (xg_col, rng)
+        else:
+            st.caption("— xg_corrected sin datos numéricos")
+            selected["flt_xg"] = (None, None)
+    else:
+        st.caption("— columna no encontrada: **xg_corrected**")
+        selected["flt_xg"] = (None, None)
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("Limpiar filtros"):
+            for k in ["flt_team","flt_rival","flt_temporada","flt_competencia","flt_final"]:
+                ss[k] = []
+            if "flt_xg_default" in ss:
+                ss["flt_xg"] = ss["flt_xg_default"]
+            st.rerun()
+    with col_b:
+        btn_label = "Seleccionar Zona Análisis" if not ss.show_selector else "Ocultar Selector de Zonas"
+        if st.button(btn_label):
+            ss.show_selector = not ss.show_selector
+            st.rerun()
+
+    return selected
+
+def apply_general_filters(df: pd.DataFrame, sel: dict):
+    if df is None:
         return None
-    df = pd.read_csv(path)
-    # asegurar tipos numéricos en posiciones
-    for c in ["x", "y", "endX", "endY"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
+    out = df.copy()
+    # multiselect inclusivos
+    for k in ["flt_team","flt_rival","flt_temporada","flt_competencia","flt_final"]:
+        colname, values = sel.get(k, (None, []))
+        if colname and values:
+            out = out[out[colname].isin(values)]
+    # rango xG
+    colname, rng = sel.get("flt_xg", (None, None))
+    if colname and isinstance(rng, tuple):
+        lo, hi = float(rng[0]), float(rng[1])
+        out = out[out[colname].between(lo, hi)]
+    return out
 
-def apply_filters(df: pd.DataFrame, zi: dict | None, zf: dict | None):
+# ---------- filtros por zonas ----------
+def apply_zone_filters(df: pd.DataFrame, zi: dict | None, zf: dict | None):
     """Combinado si hay ambos; si hay uno, sólo ese; si ninguno, devuelve df."""
     if df is None:
         return None
     filt = df
     if zi:
-        filt = filt[filt["x"].between(zi["x0"], zi["x1"]) & filt["y"].between(zi["y0"], zi["y1"])]
+        if not {"x","y"}.issubset(filt.columns):
+            st.warning("Falta 'x' o 'y' para filtrar por INICIO.")
+        else:
+            filt = filt[filt["x"].between(zi["x0"], zi["x1"]) & filt["y"].between(zi["y0"], zi["y1"])]
     if zf:
-        filt = filt[filt["endX"].between(zf["x0"], zf["x1"]) & filt["endY"].between(zf["y0"], zf["y1"])]
+        if not {"endX","endY"}.issubset(filt.columns):
+            st.warning("Falta 'endX' o 'endY' para filtrar por FINALIZACIÓN.")
+        else:
+            filt = filt[filt["endX"].between(zf["x0"], zf["x1"]) & filt["endY"].between(zf["y0"], zf["y1"])]
     return filt
 
-# ---------- UI ----------
-st.title("Zonas de INICIO y FINALIZACIÓN + filtro combinado + gráficas")
+# ===================== UI =====================
 
-# Botón para mostrar/ocultar selector
-btn_label = "Seleccionar Zona Análisis" if not st.session_state.show_selector else "Ocultar Selector de Zonas"
-if st.button(btn_label):
-    st.session_state.show_selector = not st.session_state.show_selector
+st.title("Análisis de Centros")
 
-# Selector (sólo visible si está activo)
-if st.session_state.show_selector:
-    c1, c2 = st.columns(2, gap="large")
-    with c1:
-        st.markdown("### Inicio de centro")
-        fig_i = build_fig(st.session_state.zone_inicio)
-        zone_i = capture_box(fig_i, "pitch_inicio")
-        if zone_i:
-            st.session_state.zone_inicio = zone_i
-        z = st.session_state.zone_inicio
-        st.write("Zona inicio:", z if z else "—")
-        if st.button("🧹 Limpiar inicio"):
-            st.session_state.zone_inicio = None
-            st.rerun()
-    with c2:
-        st.markdown("### Finalización de centro")
-        fig_f = build_fig(st.session_state.zone_final)
-        zone_f = capture_box(fig_f, "pitch_final")
-        if zone_f:
-            st.session_state.zone_final = zone_f
-        z = st.session_state.zone_final
-        st.write("Zona finalización:", z if z else "—")
-        if st.button("🧹 Limpiar finalización"):
-            st.session_state.zone_final = None
-            st.rerun()
-
-st.divider()
-
-# Cargar DF y aplicar filtro
 df = load_cross_stats()
-if df is not None:
-    zi, zf = st.session_state.zone_inicio, st.session_state.zone_final
-    df_scope = apply_filters(df, zi, zf)
+if df is None:
+    st.stop()
 
-    st.subheader("Validación del filtro (head)")
-    st.caption(f"Filas resultantes: {len(df_scope)} de {len(df)}")
-    st.dataframe(df_scope.head(), use_container_width=True, hide_index=True)
+# Layout: panel izquierdo (filtros) / derecho (selector + resultados)
+col_filters, col_main = st.columns([0.28, 0.72], gap="large")
+
+with col_filters:
+    selections = general_filter_panel(df)
+
+with col_main:
+    # Selector de zonas (opcional)
+    if ss.show_selector:
+        c1, c2 = st.columns(2, gap="large")
+        with c1:
+            st.markdown("#### Inicio de centro")
+            fig_i = build_fig(ss.zone_inicio)
+            zone_i = capture_box(fig_i, "pitch_inicio")
+            if zone_i:
+                ss.zone_inicio = zone_i
+            st.caption(f"Zona inicio: {ss.zone_inicio if ss.zone_inicio else '—'}")
+            if st.button("🧹 Limpiar inicio"):
+                ss.zone_inicio = None
+                st.rerun()
+        with c2:
+            st.markdown("#### Finalización de centro")
+            fig_f = build_fig(ss.zone_final)
+            zone_f = capture_box(fig_f, "pitch_final")
+            if zone_f:
+                ss.zone_final = zone_f
+            st.caption(f"Zona finalización: {ss.zone_final if ss.zone_final else '—'}")
+            if st.button("🧹 Limpiar finalización"):
+                ss.zone_final = None
+                st.rerun()
 
     st.divider()
-    st.subheader("Gráficas (sobre el DF filtrado si hay filtro, o sobre el total)")
 
-    # Funnel Abierto vs Cerrado
+    # Aplicar filtros: primero generales, luego zonas
+    df_after_general = apply_general_filters(df, selections)
+    df_scope = apply_zone_filters(df_after_general, ss.zone_inicio, ss.zone_final)
+
+    st.subheader("Situaciones principales")
+    st.caption(f"Filas resultantes: {len(df_scope)} de {len(df)}")
+    st.dataframe(df_scope.sort_values(by='xg_corrected', ascending=False), use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("Gráficas")
+
     try:
         fig_funnel = funnel_por_tipo(df_scope, open_label="Abierto", closed_label="Cerrado")
         st.plotly_chart(fig_funnel, use_container_width=True)
