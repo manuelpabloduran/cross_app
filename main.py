@@ -63,6 +63,9 @@ def load_cross_stats():
     for c in ["Chipped", "Keypass"]:
         if c in df.columns:
             df[c] = _coerce_binary(df[c])
+    
+    df['xg_corrected'] = df['xg_corrected'].fillna(0)
+    
     return df
 
 # ---------- figura base (pitch con box-select) ----------
