@@ -2,7 +2,7 @@ import io, base64
 import streamlit as st
 import plotly.graph_objects as go
 from mplsoccer import Pitch
-from streamlit_plotly_events import plotly_events
+from streamlit_plotly_events2 import plotly_events
 
 # --- helper: pitch Opta sin márgenes ---
 import io, base64
