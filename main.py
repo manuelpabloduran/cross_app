@@ -1,13 +1,13 @@
-# Version: 2.6
-# Sidebar con filtros generales (multiselects + binarios + slider xG)
-# Selector opcional de zonas (Inicio / Finalización) sobre 'pitch_opta'
-# Filtro combinado: primero filtros generales, luego zonas (uno o ambos)
-# Gráficos (chart_cross.*) y luego "Situaciones principales" al final
+# Version: 2.7
+# + Bloque de "Conclusiones" al final
+# + Botón "Imprimir / Guardar PDF" (usa diálogo del navegador)
+# Resto: igual a v2.6 (filtros sidebar, selector zonas, gráficos, situaciones principales al final)
 
 import os, base64
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
+import streamlit.components.v1 as components  # <-- para el botón de imprimir
 
 from chart_cross import (
     funnel_por_tipo,
@@ -38,6 +38,7 @@ ss = st.session_state
 ss.setdefault("zone_inicio", None)
 ss.setdefault("zone_final", None)
 ss.setdefault("show_selector", False)
+ss.setdefault("conclusiones", "")  # <-- texto libre
 
 # --- keys de filtros (para reset) ---
 MULTI_KEYS = [
@@ -47,20 +48,16 @@ MULTI_KEYS = [
 BIN_KEYS = ["flt_chipped","flt_keypass"]
 
 def reset_filtros_callback():
-    # multiselects -> listas vacías
     for k in MULTI_KEYS:
         st.session_state[k] = []
-    # binarios -> None y UI en "Todos"
     for k in BIN_KEYS:
         st.session_state[k] = None
         st.session_state[k + "_ui"] = "Todos"
-    # slider xG -> rango completo
     if "flt_xg_default" in st.session_state:
         st.session_state["flt_xg"] = st.session_state["flt_xg_default"]
 
 # ---------- carga del CSV ----------
 def _coerce_binary(series: pd.Series) -> pd.Series:
-    """Normaliza binarios a 0/1 (admite bool/strings). Devuelve Int64 (permite NaN)."""
     if series.dtype == bool:
         return series.astype("Int64").replace({True: 1, False: 0})
     s = series.copy()
@@ -80,17 +77,14 @@ def load_cross_stats():
         return None
     df = pd.read_csv(path)
 
-    # asegurar tipos numéricos
     for c in ["x", "y", "endX", "endY", "xg_corrected"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # normalizar binarios (si existen)
     for c in ["Chipped", "Keypass"]:
         if c in df.columns:
             df[c] = _coerce_binary(df[c])
 
-    # evitar perder casos con xg vacíos
     if "xg_corrected" in df.columns:
         df["xg_corrected"] = df["xg_corrected"].fillna(0)
 
@@ -103,10 +97,11 @@ def build_fig(zone=None):
         height=520,
         margin=dict(l=10, r=10, t=10, b=10),
         xaxis=dict(range=[0, 100], visible=False, scaleanchor="y", scaleratio=1),
-        yaxis=dict(range=[0, 100], visible=False),   # (0,0) abajo-izq; Y↑
+        yaxis=dict(range=[0, 100], visible=False),
         dragmode="select",
         paper_bgcolor="white",
         plot_bgcolor="white",
+        font=dict(color="black"),
     )
     fig.add_layout_image(dict(
         source=image_data_url(IMG_PATH),
@@ -114,10 +109,9 @@ def build_fig(zone=None):
         x=0, y=0, sizex=100, sizey=100,
         xanchor="left", yanchor="bottom",
         sizing="stretch",
-        opacity=1.0,          # <- sin transparencia
+        opacity=1.0,
         layer="below"
     ))
-    # malla de puntos “fantasma” para que el box-select emita eventos
     step = 1
     xs = [xx for xx in range(0, 101, step) for _ in range(0, 101, step)]
     ys = [yy for _ in range(0, 101, step) for yy in range(0, 101, step)]
@@ -126,7 +120,6 @@ def build_fig(zone=None):
         marker=dict(size=5, opacity=0.01),
         hoverinfo="skip", showlegend=False
     ))
-    # dibujar zona si existe
     if zone:
         fig.add_shape(
             type="rect",
@@ -138,7 +131,6 @@ def build_fig(zone=None):
     return fig
 
 def capture_box(fig, widget_key: str):
-    """Devuelve dict con x0,x1,y0,y1 (o None) usando box select."""
     try:
         from streamlit_plotly_events2 import plotly_events
     except Exception:
@@ -152,7 +144,6 @@ def capture_box(fig, widget_key: str):
     )
     if not selected:
         return None
-    # puede ser lista de puntos o dict con 'points'
     if isinstance(selected, list) and selected and isinstance(selected[0], dict) and "x" in selected[0]:
         pts = selected
     elif isinstance(selected[-1], dict) and "points" in selected[-1]:
@@ -166,10 +157,8 @@ def capture_box(fig, widget_key: str):
     x0, x1 = min(xs), max(xs)
     y0, y1 = min(ys), max(ys)
     clamp = lambda v: max(0.0, min(100.0, v))
-    return {
-        "x0": round(clamp(x0), 2), "x1": round(clamp(x1), 2),
-        "y0": round(clamp(y0), 2), "y1": round(clamp(y1), 2),
-    }
+    return {"x0": round(clamp(x0), 2), "x1": round(clamp(x1), 2),
+            "y0": round(clamp(y0), 2), "y1": round(clamp(y1), 2)}
 
 # ---------- filtros generales (sidebar) ----------
 FILTER_KEYS = {
@@ -179,7 +168,6 @@ FILTER_KEYS = {
     "competencia": "Competencia",
     "finalizacion": "ultimo_event_name",
     "xg": "xg_corrected",
-    # extra:
     "tipo": "cross_tipo",
     "pie": "cross_pie",
     "chipped": "Chipped",
@@ -200,7 +188,6 @@ def general_filter_panel(df: pd.DataFrame):
                 selected[key] = (None, [])
 
         def bin_sel(label, colname, key):
-            """Devuelve None (todos), 1 (sí) o 0 (no) y persiste en ss[key]."""
             if colname in df.columns:
                 options = ["Todos", "Sí (1)", "No (0)"]
                 idx_default = 0
@@ -235,15 +222,11 @@ def general_filter_panel(df: pd.DataFrame):
         if xg_col in df.columns:
             xg_series = df[xg_col].dropna()
             if len(xg_series):
-                xg_min = float(xg_series.min())
-                xg_max = float(xg_series.max())
+                xg_min = float(xg_series.min()); xg_max = float(xg_series.max())
                 ss.setdefault("flt_xg_default", (xg_min, xg_max))
-                rng = st.slider(
-                    "Rango xG",
-                    min_value=xg_min, max_value=xg_max,
-                    value=ss.get("flt_xg", ss["flt_xg_default"]),
-                    step=0.01, key="flt_xg"
-                )
+                rng = st.slider("Rango xG", min_value=xg_min, max_value=xg_max,
+                                value=ss.get("flt_xg", ss["flt_xg_default"]),
+                                step=0.01, key="flt_xg")
                 selected["flt_xg"] = (xg_col, rng)
             else:
                 st.caption("— xg_corrected sin datos numéricos")
@@ -268,17 +251,14 @@ def apply_general_filters(df: pd.DataFrame, sel: dict):
     if df is None:
         return None
     out = df.copy()
-    # multiselect inclusivos
     for k in ["flt_team","flt_rival","flt_temporada","flt_competencia","flt_final","flt_tipo","flt_pie"]:
         colname, values = sel.get(k, (None, []))
         if colname and values:
             out = out[out[colname].isin(values)]
-    # binarios
     for k in ["flt_chipped", "flt_keypass"]:
         colname, val = sel.get(k, (None, None))
         if colname and val is not None:
             out = out[out[colname] == val]
-    # rango xG
     colname, rng = sel.get("flt_xg", (None, None))
     if colname and isinstance(rng, tuple):
         lo, hi = float(rng[0]), float(rng[1])
@@ -287,7 +267,6 @@ def apply_general_filters(df: pd.DataFrame, sel: dict):
 
 # ---------- filtros por zonas ----------
 def apply_zone_filters(df: pd.DataFrame, zi: dict | None, zf: dict | None):
-    """Combinado si hay ambos; si hay uno, sólo ese; si ninguno, devuelve df."""
     if df is None:
         return None
     filt = df
@@ -315,7 +294,6 @@ if df is None:
 selections = general_filter_panel(df)
 
 # Contenido principal
-# Selector de zonas (opcional)
 if ss.show_selector:
     c1, c2 = st.columns(2, gap="large")
     with c1:
@@ -341,7 +319,7 @@ if ss.show_selector:
 
 st.divider()
 
-# Aplicar filtros: primero generales, luego zonas
+# Aplicar filtros
 df_after_general = apply_general_filters(df, selections)
 df_scope = apply_zone_filters(df_after_general, ss.zone_inicio, ss.zone_final)
 
@@ -403,3 +381,34 @@ if not df_scope.empty and "xg_corrected" in df_scope.columns:
     st.dataframe(df_scope.sort_values(by="xg_corrected", ascending=False), use_container_width=True, hide_index=True)
 else:
     st.dataframe(df_scope, use_container_width=True, hide_index=True)
+
+st.divider()
+
+# ---- Conclusiones + Botón Imprimir/Guardar PDF ----
+st.subheader("Conclusiones")
+ss.conclusiones = st.text_area(
+    "Escribí tus conclusiones del análisis",
+    value=ss.conclusiones, height=180,
+    help="Este texto se guarda en la sesión actual. Podés descargarlo o incluirlo al imprimir."
+)
+
+
+# CSS simple para mejorar impresión (oculta botones al imprimir)
+components.html("""
+    <style>
+    @media print {
+        button, [role="button"] { display: none !important; }
+        header, footer { visibility: hidden !important; }
+        /* intenta preservar colores */
+        .stApp { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+    </style>
+    <div style="text-align:right; margin-top:6px;">
+        <button onclick="parent.window.print()" style="padding:8px 14px; font-size:14px;">
+        🖨️ Imprimir / Guardar PDF
+        </button>
+    </div>
+""", height=60)
+
+# ---- Fin de la app ----
+st.caption("Versión 2.7 - Análisis de Centros con filtros y zonas")
