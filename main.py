@@ -152,6 +152,26 @@ FILTER_KEYS = {
     "keypass": "Keypass",
 }
 
+# --- keys de filtros (para reset) ---
+MULTI_KEYS = [
+    "flt_team","flt_rival","flt_temporada","flt_competencia",
+    "flt_final","flt_tipo","flt_pie"
+]
+BIN_KEYS = ["flt_chipped","flt_keypass"]
+
+def reset_filtros_callback():
+    # multiselects -> listas vacías
+    for k in MULTI_KEYS:
+        st.session_state[k] = []
+    # binarios -> None y UI en "Todos"
+    for k in BIN_KEYS:
+        st.session_state[k] = None
+        st.session_state[k + "_ui"] = "Todos"
+    # slider xG -> rango completo
+    if "flt_xg_default" in st.session_state:
+        st.session_state["flt_xg"] = st.session_state["flt_xg_default"]
+
+
 def general_filter_panel(df: pd.DataFrame):
     selected = {}
     with st.sidebar.expander("Filtros generales", expanded=True):
@@ -221,23 +241,13 @@ def general_filter_panel(df: pd.DataFrame):
         # Acciones
         col_a, col_b = st.columns(2)
         with col_a:
-            if st.button("Limpiar filtros"):
-                # multiselects
-                for k in ["flt_team","flt_rival","flt_temporada","flt_competencia","flt_final","flt_tipo","flt_pie"]:
-                    ss[k] = []
-                # binarios
-                for k in ["flt_chipped","flt_keypass"]:
-                    ss[k] = None
-                    ss[k+"_ui"] = "Todos"
-                # xG
-                if "flt_xg_default" in ss:
-                    ss["flt_xg"] = ss["flt_xg_default"]
-                st.rerun()
+            st.button("Limpiar filtros", on_click=reset_filtros_callback)
         with col_b:
             new_val = st.toggle("Seleccionar Zona Análisis", value=ss.show_selector, key="toggle_selector")
             if new_val != ss.show_selector:
                 ss.show_selector = new_val
                 st.rerun()
+
 
     return selected
 
