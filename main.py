@@ -6,7 +6,7 @@ import os, base64
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
-from charts_cross import funnel_por_tipo  # <- módulo externo con funciones de gráficos
+from chart_cross import funnel_por_tipo  # <- módulo externo con funciones de gráficos
 
 st.set_page_config(page_title="Zonas Inicio/Final + Filtro + Gráficas", page_icon="⚽", layout="wide")
 
