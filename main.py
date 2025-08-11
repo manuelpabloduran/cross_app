@@ -1,88 +1,103 @@
 # main.py
+import io
 import json
+import base64
 from datetime import datetime
+
 import pandas as pd
 import streamlit as st
-from PIL import Image, ImageDraw
-from streamlit_drawable_canvas import st_canvas
+import plotly.graph_objects as go
+from mplsoccer import Pitch
+
+# Intentamos importar el componente de eventos (v2 o el original)
+try:
+    from streamlit_plotly_events2 import plotly_events
+except Exception:
+    from streamlit_plotly_events import plotly_events
 
 # ---------------- Config ---------------- #
-st.set_page_config(page_title="Selección de coordenadas (Opta 100x100)", page_icon="⚽", layout="wide")
+st.set_page_config(page_title="Análisis de centros • Selección Opta 100x100", page_icon="⚽", layout="wide")
 
-# ---------------- Helpers ---------------- #
-def draw_pitch(width=900, height=600, rows=6, cols=5):
-    """
-    Devuelve imagen PIL de un campo + grilla rows x cols y el rectángulo 'inner'
-    (área jugable) para mapear píxeles -> [0..100]x[0..100].
-    """
-    green = (22, 92, 22)
-    green_dark = (16, 70, 16)
-    white = (245, 245, 245)
-    grid = (230, 230, 230)
-
-    im = Image.new("RGB", (width, height), green)
-    dr = ImageDraw.Draw(im)
-
-    pad = 20  # padding exterior
-    x0, y0, x1, y1 = pad, pad, width - pad, height - pad
-    inner = (x0, y0, x1, y1)
-
-    # Rayado césped
-    stripe = 40
-    for x in range(x0, x1, stripe):
-        dr.rectangle([x, y0, x + stripe // 2, y1], fill=green_dark)
-
-    # Líneas principales
-    dr.rectangle([x0, y0, x1, y1], outline=white, width=4)
-    dr.line([ (width//2, y0), (width//2, y1) ], fill=white, width=2)
-    r = 60
-    dr.ellipse([width//2 - r, height//2 - r, width//2 + r, height//2 + r], outline=white, width=2)
-
-    # Áreas (simple estético)
-    area_h = int((y1 - y0) * 0.32)
-    dr.rectangle([x0, y0, x1, y0 + area_h], outline=white, width=3)        # Superior
-    dr.rectangle([x0, y1 - area_h, x1, y1], outline=white, width=3)        # Inferior
-
-    # Grilla (visual/guía)
-    for r_i in range(rows):
-        ry0 = y0 + (r_i) * (y1 - y0) / rows
-        dr.line([ (x0, ry0), (x1, ry0) ], fill=grid, width=1)
-    for c_i in range(cols):
-        cx0 = x0 + (c_i) * (x1 - x0) / cols
-        dr.line([ (cx0, y0), (cx0, y1) ], fill=grid, width=1)
-
-    return im, inner
-
-def pixel_to_opta(px, py, inner_box):
-    """
-    Mapea un punto en píxeles del canvas (px,py) al sistema Opta 0..100,0..100.
-    (0,0) esquina superior-izquierda, x→derecha, y→abajo.
-    """
-    x0, y0, x1, y1 = inner_box
-    if not (x0 <= px <= x1 and y0 <= py <= y1):
-        return None, None
-    rel_x = (px - x0) / (x1 - x0)  # 0..1
-    rel_y = (py - y0) / (y1 - y0)  # 0..1
-    opta_x = rel_x * 100.0
-    opta_y = rel_y * 100.0
-    return float(opta_x), float(opta_y)
-
-# ---------------- Estado ---------------- #
+# Estado
 if "clicks" not in st.session_state:
-    st.session_state.clicks = []  # lista de dicts {"x": float, "y": float, "ts": iso}
+    st.session_state.clicks = []  # cada item: {"x": float, "y": float, "ts": str}
 
 # ---------------- Sidebar ---------------- #
-st.sidebar.header("Parámetros del lienzo")
-rows = st.sidebar.slider("Filas guía (visual)", 3, 12, 6)
-cols = st.sidebar.slider("Columnas guía (visual)", 3, 12, 5)
-canvas_w = st.sidebar.slider("Ancho canvas (px)", 700, 1200, 900, step=50)
-canvas_h = int(canvas_w * 2/3)
+st.sidebar.header("Parámetros del campo")
+grid_on = st.sidebar.toggle("Mostrar grilla guía", value=True)
+grid_step = st.sidebar.slider("Paso de grilla (unidad Opta)", 2, 25, 10, step=1)
+snap = st.sidebar.toggle("Snap a grilla (redondear al paso)", value=False)
+accumulate = st.sidebar.toggle("Acumular clics", value=True)
 
-st.sidebar.header("Acciones")
-acumular = st.sidebar.toggle("Acumular clics", value=True)
-if st.sidebar.button("🧹 Limpiar seleccionados"):
+if st.sidebar.button("🧹 Limpiar puntos"):
     st.session_state.clicks = []
-    st.sidebar.success("Limpio.")
+    st.sidebar.success("Puntos borrados")
+
+# ---------------- Utilidades ---------------- #
+def mpl_pitch_png_base64(pitch_len=100, pitch_wid=100, figsize=(7.2, 5.0), dpi=160):
+    """Dibuja un pitch Opta con mplsoccer y devuelve un data URL base64 PNG."""
+    pitch = Pitch(pitch_type="opta", pitch_length=pitch_len, pitch_width=pitch_wid, line_zorder=2)
+    fig_mpl, _ = pitch.draw(figsize=figsize, tight_layout=False)
+    buf = io.BytesIO()
+    fig_mpl.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor=fig_mpl.get_facecolor())
+    buf.seek(0)
+    b64 = base64.b64encode(buf.read()).decode()
+    return f"data:image/png;base64,{b64}"
+
+def build_pitch_figure(show_grid=True, step=10, clicks=None):
+    """Crea figura Plotly 0..100 x 0..100 (Y invertida) con imagen de fondo + grilla opcional + puntos guardados."""
+    # 1) Base
+    fig = go.Figure()
+    fig.update_layout(
+        xaxis=dict(range=[0, 100], constrain="domain", scaleanchor="y", scaleratio=1, visible=False),
+        yaxis=dict(range=[100, 0], visible=False),  # Opta: origen arriba-izquierda
+        margin=dict(l=10, r=10, t=10, b=10),
+        dragmode="pan"
+    )
+
+    # 2) Fondo: imagen del pitch (mplsoccer)
+    src = mpl_pitch_png_base64()
+    fig.add_layout_image(
+        dict(
+            source=src, xref="x", yref="y",
+            x=0, y=100, sizex=100, sizey=100,
+            sizing="stretch", layer="below"
+        )
+    )
+
+    # 3) Grilla guía
+    shapes = []
+    if show_grid and step > 0:
+        ticks = list(range(0, 101, step))
+        # Verticales
+        for x in ticks:
+            shapes.append(dict(type="line", x0=x, y0=0, x1=x, y1=100, line=dict(width=1, dash="dot")))
+        # Horizontales
+        for y in ticks:
+            shapes.append(dict(type="line", x0=0, y0=y, x1=100, y1=y, line=dict(width=1, dash="dot")))
+    if shapes:
+        fig.update_layout(shapes=shapes)
+
+    # 4) Puntos ya guardados
+    if clicks and len(clicks) > 0:
+        xs = [p["x"] for p in clicks]
+        ys = [p["y"] for p in clicks]
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="markers+text", text=[str(i+1) for i in range(len(xs))],
+            textposition="top center", marker=dict(size=10),
+            name="Seleccionados", hovertemplate="(%{x:.2f}, %{y:.2f})<extra></extra>"
+        ))
+    else:
+        # capa vacía para habilitar eventos de click
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", showlegend=False))
+
+    return fig
+
+def snap_value(v, step):
+    """Redondea v al múltiplo más cercano de 'step' entre 0 y 100."""
+    if step <= 0:
+        return v
+    return max(0.0, min(100.0, round(v / step) * step))
 
 # ---------------- Tabs ---------------- #
 tab_general, tab_equipos, tab_jugadores = st.tabs([
@@ -91,53 +106,44 @@ tab_general, tab_equipos, tab_jugadores = st.tabs([
     "Rendimiento Jugadores"
 ])
 
-# ---------------- Tab 1: Selección de coordenadas ---------------- #
+# ---------------- Tab 1: Selección 100x100 ---------------- #
 with tab_general:
-    st.subheader("Campograma 100×100 (Opta) — seleccionar con un clic")
-    pitch_img, inner_box = draw_pitch(width=canvas_w, height=canvas_h, rows=rows, cols=cols)
+    st.subheader("Campograma Opta 100×100 — clic para guardar coordenadas")
 
-    canvas = st_canvas(
-        background_image=pitch_img,
-        update_streamlit=True,
-        height=canvas_h,
-        width=canvas_w,
-        drawing_mode="point",          # sólo clics
-        fill_color="rgba(255, 165, 0, 0.0)",
-        stroke_color="#ffffff",
-        stroke_width=2,
-        display_toolbar=False,
-        key="pitch_canvas",
+    # Figura (incluye puntos ya guardados)
+    fig = build_pitch_figure(show_grid=grid_on, step=grid_step, clicks=st.session_state.clicks)
+
+    # Render + captura de eventos
+    st.caption("Origen (0,0) = esquina superior izquierda • X→derecha • Y→abajo")
+    events = plotly_events(
+        fig,
+        click_event=True, select_event=False, hover_event=False,
+        override_width="100%",  # ocupa ancho del contenedor
     )
 
-    clicked = False
-    if canvas.json_data and "objects" in canvas.json_data and len(canvas.json_data["objects"]) > 0:
-        last = canvas.json_data["objects"][-1]
-        # en modo 'point' crea un 'circle': center ≈ (left+radius, top+radius)
-        px = last.get("left", 0) + last.get("radius", 0)
-        py = last.get("top", 0) + last.get("radius", 0)
-        ox, oy = pixel_to_opta(px, py, inner_box)
-        if ox is not None:
-            clicked = True
-            item = {"x": round(ox, 2), "y": round(oy, 2), "ts": datetime.utcnow().isoformat() + "Z"}
-            if acumular:
-                # Evita duplicar el mismo último clic si Streamlit re-renderiza
-                if len(st.session_state.clicks) == 0 or st.session_state.clicks[-1] != item:
-                    st.session_state.clicks.append(item)
-            else:
-                st.session_state.clicks = [item]
+    # Procesar último clic
+    if events:
+        px, py = float(events[-1]["x"]), float(events[-1]["y"])
+        # Acotar por si el clic se va fuera del área
+        px = min(100.0, max(0.0, px))
+        py = min(100.0, max(0.0, py))
+        if snap:
+            px = snap_value(px, grid_step)
+            py = snap_value(py, grid_step)
 
-    # UI derecha: último clic + lista + descargas
-    col_left, col_right = st.columns([1.2, 1])
-
-    with col_left:
-        st.caption("Coordenadas Opta (0..100, 0..100)")
-        if clicked:
-            st.success(f"Último clic → x: **{item['x']}**, y: **{item['y']}**")
+        item = {"x": round(px, 2), "y": round(py, 2), "ts": datetime.utcnow().isoformat() + "Z"}
+        if accumulate:
+            # Evitar duplicar el mismo evento inmediato
+            if not st.session_state.clicks or st.session_state.clicks[-1] != item:
+                st.session_state.clicks.append(item)
         else:
-            st.info("Hacé clic en el campo para capturar coordenadas.")
+            st.session_state.clicks = [item]
 
-        # Tabla de seleccionados
-        if len(st.session_state.clicks) > 0:
+    # Panel derecho con resultado
+    c1, c2 = st.columns([1.2, 1])
+    with c1:
+        if st.session_state.clicks:
+            st.success(f"Último clic → x: **{st.session_state.clicks[-1]['x']}**, y: **{st.session_state.clicks[-1]['y']}**")
             df = pd.DataFrame(st.session_state.clicks)
             st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -148,19 +154,19 @@ with tab_general:
             js = json.dumps(st.session_state.clicks, ensure_ascii=False, indent=2).encode("utf-8")
             st.download_button("⬇️ Descargar JSON", data=js, file_name="coordenadas_opta.json", mime="application/json")
         else:
-            st.caption("No hay puntos guardados todavía.")
+            st.info("Hacé clic en el campo para capturar coordenadas.")
 
-    with col_right:
-        st.markdown("**Notas**")
-        st.write(
-            "- El sistema es **Opta 100×100**: (0,0) arriba-izquierda, X→derecha, Y→abajo.\n"
-            "- Las líneas de la grilla son **sólo guía visual**; no afectan el valor capturado.\n"
-            "- Si desmarcás *Acumular clics*, la lista mantiene **sólo el último** punto."
-        )
+    with c2:
+        st.markdown("**Opciones**")
+        st.write(f"- Grilla guía: `{grid_on}` • paso: `{grid_step}`")
+        st.write(f"- Snap a grilla: `{snap}`")
+        st.write(f"- Acumular clics: `{accumulate}`")
+        if st.session_state.clicks:
+            st.caption("Tip: podés arrastrar para mover el canvas (no afecta las coords).")
 
-# ---------------- Tabs 2 y 3: placeholders por ahora ---------------- #
+# ---------------- Tabs 2 y 3 (placeholders por ahora) ---------------- #
 with tab_equipos:
-    st.info("Esta pestaña la completamos más adelante. Ahora sólo usamos la selección de coordenadas.")
+    st.info("Acá mostraremos métricas por equipo cuando definamos la estructura de datos.")
 
 with tab_jugadores:
-    st.info("Esta pestaña la completamos más adelante. Ahora sólo usamos la selección de coordenadas.")
+    st.info("Acá mostraremos métricas por jugador cuando definamos la estructura de datos.")

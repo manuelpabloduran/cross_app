@@ -1,4 +1,5 @@
 streamlit
-pillow
-streamlit-drawable-canvas
+plotly
+mplsoccer
 pandas
+streamlit-plotly-events2
