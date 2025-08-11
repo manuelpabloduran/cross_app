@@ -1,5 +1,9 @@
 streamlit
 plotly
 mplsoccer
+matplotlib
+seaborn
 pandas
+numpy
 streamlit-plotly-events2
+streamlit-plotly-events

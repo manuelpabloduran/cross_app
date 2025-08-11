@@ -1,14 +1,21 @@
-# Version: 2.4
+# Version: 2.5
 # Sidebar con filtros generales (multiselects + binarios + slider xG)
 # Selector opcional de zonas (Inicio / Finalización) sobre 'pitch_opta'
 # Filtro combinado: primero filtros generales, luego zonas (uno o ambos)
-# Tabla de resultados y funnel usando chart_cross.funnel_por_tipo
+# Tabla de resultados y gráficos usando chart_cross.*
 
 import os, base64
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
-from chart_cross import funnel_por_tipo  # módulo externo con funciones de gráficos
+
+from chart_cross import (
+    funnel_por_tipo,
+    trayectorias_por_resultado,
+    heatmap_flow_triptych,
+    heatmap_count_effectiveness,
+    triple_plot_by_zone,
+)
 
 st.set_page_config(page_title="Análisis de Centros • Filtros + Zonas", page_icon="⚽", layout="wide")
 
@@ -31,6 +38,25 @@ ss = st.session_state
 ss.setdefault("zone_inicio", None)
 ss.setdefault("zone_final", None)
 ss.setdefault("show_selector", False)
+
+# --- keys de filtros (para reset) ---
+MULTI_KEYS = [
+    "flt_team","flt_rival","flt_temporada","flt_competencia",
+    "flt_final","flt_tipo","flt_pie"
+]
+BIN_KEYS = ["flt_chipped","flt_keypass"]
+
+def reset_filtros_callback():
+    # multiselects -> listas vacías
+    for k in MULTI_KEYS:
+        st.session_state[k] = []
+    # binarios -> None y UI en "Todos"
+    for k in BIN_KEYS:
+        st.session_state[k] = None
+        st.session_state[k + "_ui"] = "Todos"
+    # slider xG -> rango completo
+    if "flt_xg_default" in st.session_state:
+        st.session_state["flt_xg"] = st.session_state["flt_xg_default"]
 
 # ---------- carga del CSV ----------
 def _coerce_binary(series: pd.Series) -> pd.Series:
@@ -63,9 +89,6 @@ def load_cross_stats():
     for c in ["Chipped", "Keypass"]:
         if c in df.columns:
             df[c] = _coerce_binary(df[c])
-    
-    df['xg_corrected'] = df['xg_corrected'].fillna(0)
-    
     return df
 
 # ---------- figura base (pitch con box-select) ----------
@@ -155,26 +178,6 @@ FILTER_KEYS = {
     "keypass": "Keypass",
 }
 
-# --- keys de filtros (para reset) ---
-MULTI_KEYS = [
-    "flt_team","flt_rival","flt_temporada","flt_competencia",
-    "flt_final","flt_tipo","flt_pie"
-]
-BIN_KEYS = ["flt_chipped","flt_keypass"]
-
-def reset_filtros_callback():
-    # multiselects -> listas vacías
-    for k in MULTI_KEYS:
-        st.session_state[k] = []
-    # binarios -> None y UI en "Todos"
-    for k in BIN_KEYS:
-        st.session_state[k] = None
-        st.session_state[k + "_ui"] = "Todos"
-    # slider xG -> rango completo
-    if "flt_xg_default" in st.session_state:
-        st.session_state["flt_xg"] = st.session_state["flt_xg_default"]
-
-
 def general_filter_panel(df: pd.DataFrame):
     selected = {}
     with st.sidebar.expander("Filtros generales", expanded=True):
@@ -250,7 +253,6 @@ def general_filter_panel(df: pd.DataFrame):
             if new_val != ss.show_selector:
                 ss.show_selector = new_val
                 st.rerun()
-
 
     return selected
 
@@ -337,15 +339,57 @@ df_scope = apply_zone_filters(df_after_general, ss.zone_inicio, ss.zone_final)
 
 st.subheader("Situaciones principales")
 st.caption(f"Filas resultantes: {len(df_scope)} de {len(df)}")
-if "xg_corrected" in df_scope.columns:
+if not df_scope.empty and "xg_corrected" in df_scope.columns:
     st.dataframe(df_scope.sort_values(by="xg_corrected", ascending=False), use_container_width=True, hide_index=True)
 else:
     st.dataframe(df_scope, use_container_width=True, hide_index=True)
 
 st.divider()
 st.subheader("Análisis Gráfico")
+
+# 1) Funnel (Plotly)
 try:
     fig_funnel = funnel_por_tipo(df_scope, open_label="Abierto", closed_label="Cerrado")
     st.plotly_chart(fig_funnel, use_container_width=True)
 except Exception as e:
-    st.warning(f"No se pudo construir el funnel: {e}")
+    st.warning(f"Funnel: {e}")
+
+# 2) Trayectorias por resultado (mplsoccer)
+try:
+    fig_tray = trayectorias_por_resultado(df_scope)
+    st.pyplot(fig_tray, use_container_width=True)
+except Exception as e:
+    st.warning(f"Trayectorias: {e}")
+
+# 3) Heatmap+Flow triptych (mplsoccer)
+try:
+    fig_trip = heatmap_flow_triptych(df_scope)
+    st.pyplot(fig_trip, use_container_width=True)
+except Exception as e:
+    st.warning(f"Heatmap/Flow: {e}")
+
+# 4) Conteo y % efectividad por zona (mplsoccer)
+try:
+    fig_ce = heatmap_count_effectiveness(df_scope)
+    st.pyplot(fig_ce, use_container_width=True)
+except Exception as e:
+    st.warning(f"Conteo/Efectividad: {e}")
+
+# 5) Triple plot usando zona_inicio como rectangle_limits
+st.subheader("Triple plot de finalizaciones en zona seleccionada (usa Zona Inicio)")
+if ss.zone_inicio:
+    try:
+        rect = (ss.zone_inicio["x0"], ss.zone_inicio["x1"], ss.zone_inicio["y0"], ss.zone_inicio["y1"])
+        fig_tz = triple_plot_by_zone(
+            df=df_scope,
+            zone_name="Centro desde zona seleccionada",
+            rectangle_limits=rect,
+            title="",
+            modo="sum",           # 'sum' / 'mean' / etc. (según necesidad)
+            bin_size=3
+        )
+        st.pyplot(fig_tz, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Triple plot por zona: {e}")
+else:
+    st.info("Para el triple plot, seleccioná primero una Zona de Inicio en el selector de zonas.")
