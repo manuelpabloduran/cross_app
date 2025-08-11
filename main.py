@@ -1,12 +1,14 @@
-# Version: 2.3
-# Filtros generales (panel izq) + doble selector opcional + filtro combinado/único
-# y gráficas sobre df_scope. Requiere charts_cross.py (funnel_por_tipo).
+# Version: 2.4
+# Sidebar con filtros generales (multiselects + binarios + slider xG)
+# Selector opcional de zonas (Inicio / Finalización) sobre 'pitch_opta'
+# Filtro combinado: primero filtros generales, luego zonas (uno o ambos)
+# Tabla de resultados y funnel usando chart_cross.funnel_por_tipo
 
 import os, base64
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
-from chart_cross import funnel_por_tipo  # funciones de gráficos
+from chart_cross import funnel_por_tipo  # módulo externo con funciones de gráficos
 
 st.set_page_config(page_title="Análisis de Centros • Filtros + Zonas", page_icon="⚽", layout="wide")
 
@@ -31,6 +33,19 @@ ss.setdefault("zone_final", None)
 ss.setdefault("show_selector", False)
 
 # ---------- carga del CSV ----------
+def _coerce_binary(series: pd.Series) -> pd.Series:
+    """Normaliza binarios a 0/1 (admite bool/strings). Devuelve Int64 (permite NaN)."""
+    if series.dtype == bool:
+        return series.astype("Int64").replace({True: 1, False: 0})
+    s = series.copy()
+    s = s.replace({
+        True: 1, False: 0,
+        "true": 1, "false": 0, "True": 1, "False": 0,
+        "yes": 1, "no": 0, "Yes": 1, "No": 0
+    })
+    s = pd.to_numeric(s, errors="coerce")
+    return s.astype("Int64")
+
 def load_cross_stats():
     candidates = ["cross_stats.csv", "data/cross_stats.csv", "dataset/cross_stats.csv"]
     path = next((p for p in candidates if os.path.exists(p)), None)
@@ -38,10 +53,16 @@ def load_cross_stats():
         st.error("No encontré 'cross_stats.csv' (probé en raíz, /data y /dataset).")
         return None
     df = pd.read_csv(path)
+
     # asegurar tipos numéricos
     for c in ["x", "y", "endX", "endY", "xg_corrected"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # normalizar binarios (si existen)
+    for c in ["Chipped", "Keypass"]:
+        if c in df.columns:
+            df[c] = _coerce_binary(df[c])
     return df
 
 # ---------- figura base (pitch con box-select) ----------
@@ -50,8 +71,8 @@ def build_fig(zone=None):
     fig.update_layout(
         height=520,
         margin=dict(l=10, r=10, t=10, b=10),
-        xaxis=dict(range=[0,100], visible=False, scaleanchor="y", scaleratio=1),
-        yaxis=dict(range=[0,100], visible=False),   # (0,0) abajo-izq; Y↑
+        xaxis=dict(range=[0, 100], visible=False, scaleanchor="y", scaleratio=1),
+        yaxis=dict(range=[0, 100], visible=False),   # (0,0) abajo-izq; Y↑
         dragmode="select"
     )
     fig.add_layout_image(dict(
@@ -64,8 +85,8 @@ def build_fig(zone=None):
     ))
     # malla de puntos “fantasma” para que el box-select emita eventos
     step = 1
-    xs = [xx for xx in range(0,101,step) for _ in range(0,101,step)]
-    ys = [yy for _ in range(0,101,step) for yy in range(0,101,step)]
+    xs = [xx for xx in range(0, 101, step) for _ in range(0, 101, step)]
+    ys = [yy for _ in range(0, 101, step) for yy in range(0, 101, step)]
     fig.add_trace(go.Scattergl(
         x=xs, y=ys, mode="markers",
         marker=dict(size=5, opacity=0.01),
@@ -97,6 +118,7 @@ def capture_box(fig, widget_key: str):
     )
     if not selected:
         return None
+    # puede ser lista de puntos o dict con 'points'
     if isinstance(selected, list) and selected and isinstance(selected[0], dict) and "x" in selected[0]:
         pts = selected
     elif isinstance(selected[-1], dict) and "points" in selected[-1]:
@@ -110,10 +132,12 @@ def capture_box(fig, widget_key: str):
     x0, x1 = min(xs), max(xs)
     y0, y1 = min(ys), max(ys)
     clamp = lambda v: max(0.0, min(100.0, v))
-    return {"x0": round(clamp(x0), 2), "x1": round(clamp(x1), 2),
-            "y0": round(clamp(y0), 2), "y1": round(clamp(y1), 2)}
+    return {
+        "x0": round(clamp(x0), 2), "x1": round(clamp(x1), 2),
+        "y0": round(clamp(y0), 2), "y1": round(clamp(y1), 2),
+    }
 
-# ---------- filtros generales (panel izquierdo) ----------
+# ---------- filtros generales (sidebar) ----------
 FILTER_KEYS = {
     "team": "TeamName",
     "rival": "TeamRival",
@@ -121,63 +145,99 @@ FILTER_KEYS = {
     "competencia": "Competencia",
     "finalizacion": "ultimo_event_name",
     "xg": "xg_corrected",
+    # extra:
+    "tipo": "cross_tipo",
+    "pie": "cross_pie",
+    "chipped": "Chipped",
+    "keypass": "Keypass",
 }
 
 def general_filter_panel(df: pd.DataFrame):
-    st.markdown("### Filtros generales")
     selected = {}
-    # Helper para multiselect seguro
-    def ms(label, colname, key):
-        if colname in df.columns:
-            opts = sorted([x for x in df[colname].dropna().unique().tolist()])
-            val = st.multiselect(label, options=opts, default=[], key=key)
-            selected[key] = (colname, val)
-        else:
-            st.caption(f"— columna no encontrada: **{colname}**")
-            selected[key] = (None, [])
-    # Multiselects
-    ms("Equipo", FILTER_KEYS["team"], "flt_team")
-    ms("Rival", FILTER_KEYS["rival"], "flt_rival")
-    ms("Temporada", FILTER_KEYS["temporada"], "flt_temporada")
-    ms("Competencia", FILTER_KEYS["competencia"], "flt_competencia")
-    ms("Finalización (ultimo_event_name)", FILTER_KEYS["finalizacion"], "flt_final")
+    with st.sidebar.expander("Filtros generales", expanded=True):
 
-    # Slider xG
-    xg_col = FILTER_KEYS["xg"]
-    if xg_col in df.columns:
-        xg_series = df[xg_col].dropna()
-        if len(xg_series):
-            xg_min = float(xg_series.min())
-            xg_max = float(xg_series.max())
-            # inicializar default del slider
-            ss.setdefault("flt_xg_default", (xg_min, xg_max))
-            rng = st.slider(
-                "Rango xG (xg_corrected)",
-                min_value=xg_min, max_value=xg_max,
-                value=ss.get("flt_xg", ss["flt_xg_default"]),
-                step=0.01, key="flt_xg"
-            )
-            selected["flt_xg"] = (xg_col, rng)
+        def ms(label, colname, key):
+            if colname in df.columns:
+                opts = sorted([x for x in df[colname].dropna().unique().tolist()])
+                val = st.multiselect(label, options=opts, default=ss.get(key, []), key=key)
+                selected[key] = (colname, val)
+            else:
+                st.caption(f"— columna no encontrada: **{colname}**")
+                selected[key] = (None, [])
+
+        def bin_sel(label, colname, key):
+            """Devuelve None (todos), 1 (sí) o 0 (no) y persiste en ss[key]."""
+            if colname in df.columns:
+                options = ["Todos", "Sí (1)", "No (0)"]
+                idx_default = 0
+                prev = ss.get(key, None)
+                if prev == 1: idx_default = 1
+                elif prev == 0: idx_default = 2
+                choice = st.selectbox(label, options=options, index=idx_default, key=key+"_ui")
+                val = None
+                if choice == "Sí (1)": val = 1
+                elif choice == "No (0)": val = 0
+                selected[key] = (colname, val)
+                ss[key] = val
+            else:
+                st.caption(f"— columna no encontrada: **{colname}**")
+                selected[key] = (None, None)
+
+        # Multiselects
+        ms("Equipo",         FILTER_KEYS["team"],        "flt_team")
+        ms("Rival",          FILTER_KEYS["rival"],       "flt_rival")
+        ms("Temporada",      FILTER_KEYS["temporada"],   "flt_temporada")
+        ms("Competencia",    FILTER_KEYS["competencia"], "flt_competencia")
+        ms("Finalización",   FILTER_KEYS["finalizacion"],"flt_final")
+        ms("Tipo de centro", FILTER_KEYS["tipo"],        "flt_tipo")
+        ms("Pie del centro", FILTER_KEYS["pie"],         "flt_pie")
+
+        # Binarios
+        bin_sel("Chipped",   FILTER_KEYS["chipped"],     "flt_chipped")
+        bin_sel("Keypass",   FILTER_KEYS["keypass"],     "flt_keypass")
+
+        # Slider xG
+        xg_col = FILTER_KEYS["xg"]
+        if xg_col in df.columns:
+            xg_series = df[xg_col].dropna()
+            if len(xg_series):
+                xg_min = float(xg_series.min())
+                xg_max = float(xg_series.max())
+                ss.setdefault("flt_xg_default", (xg_min, xg_max))
+                rng = st.slider(
+                    "Rango xG",
+                    min_value=xg_min, max_value=xg_max,
+                    value=ss.get("flt_xg", ss["flt_xg_default"]),
+                    step=0.01, key="flt_xg"
+                )
+                selected["flt_xg"] = (xg_col, rng)
+            else:
+                st.caption("— xg_corrected sin datos numéricos")
+                selected["flt_xg"] = (None, None)
         else:
-            st.caption("— xg_corrected sin datos numéricos")
+            st.caption("— columna no encontrada: **xg_corrected**")
             selected["flt_xg"] = (None, None)
-    else:
-        st.caption("— columna no encontrada: **xg_corrected**")
-        selected["flt_xg"] = (None, None)
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("Limpiar filtros"):
-            for k in ["flt_team","flt_rival","flt_temporada","flt_competencia","flt_final"]:
-                ss[k] = []
-            if "flt_xg_default" in ss:
-                ss["flt_xg"] = ss["flt_xg_default"]
-            st.rerun()
-    with col_b:
-        btn_label = "Seleccionar Zona Análisis" if not ss.show_selector else "Ocultar Selector de Zonas"
-        if st.button(btn_label):
-            ss.show_selector = not ss.show_selector
-            st.rerun()
+        # Acciones
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("Limpiar filtros"):
+                # multiselects
+                for k in ["flt_team","flt_rival","flt_temporada","flt_competencia","flt_final","flt_tipo","flt_pie"]:
+                    ss[k] = []
+                # binarios
+                for k in ["flt_chipped","flt_keypass"]:
+                    ss[k] = None
+                    ss[k+"_ui"] = "Todos"
+                # xG
+                if "flt_xg_default" in ss:
+                    ss["flt_xg"] = ss["flt_xg_default"]
+                st.rerun()
+        with col_b:
+            new_val = st.toggle("Seleccionar Zona Análisis", value=ss.show_selector, key="toggle_selector")
+            if new_val != ss.show_selector:
+                ss.show_selector = new_val
+                st.rerun()
 
     return selected
 
@@ -186,10 +246,15 @@ def apply_general_filters(df: pd.DataFrame, sel: dict):
         return None
     out = df.copy()
     # multiselect inclusivos
-    for k in ["flt_team","flt_rival","flt_temporada","flt_competencia","flt_final"]:
+    for k in ["flt_team","flt_rival","flt_temporada","flt_competencia","flt_final","flt_tipo","flt_pie"]:
         colname, values = sel.get(k, (None, []))
         if colname and values:
             out = out[out[colname].isin(values)]
+    # binarios
+    for k in ["flt_chipped", "flt_keypass"]:
+        colname, val = sel.get(k, (None, None))
+        if colname and val is not None:
+            out = out[out[colname] == val]
     # rango xG
     colname, rng = sel.get("flt_xg", (None, None))
     if colname and isinstance(rng, tuple):
@@ -223,52 +288,51 @@ df = load_cross_stats()
 if df is None:
     st.stop()
 
-# Layout: panel izquierdo (filtros) / derecho (selector + resultados)
-col_filters, col_main = st.columns([0.28, 0.72], gap="large")
+# Filtros en el sidebar
+selections = general_filter_panel(df)
 
-with col_filters:
-    selections = general_filter_panel(df)
+# Contenido principal
+# Selector de zonas (opcional)
+if ss.show_selector:
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        st.markdown("#### Inicio de centro")
+        fig_i = build_fig(ss.zone_inicio)
+        zone_i = capture_box(fig_i, "pitch_inicio")
+        if zone_i:
+            ss.zone_inicio = zone_i
+        st.caption(f"Zona inicio: {ss.zone_inicio if ss.zone_inicio else '—'}")
+        if st.button("🧹 Limpiar inicio"):
+            ss.zone_inicio = None
+            st.rerun()
+    with c2:
+        st.markdown("#### Finalización de centro")
+        fig_f = build_fig(ss.zone_final)
+        zone_f = capture_box(fig_f, "pitch_final")
+        if zone_f:
+            ss.zone_final = zone_f
+        st.caption(f"Zona finalización: {ss.zone_final if ss.zone_final else '—'}")
+        if st.button("🧹 Limpiar finalización"):
+            ss.zone_final = None
+            st.rerun()
 
-with col_main:
-    # Selector de zonas (opcional)
-    if ss.show_selector:
-        c1, c2 = st.columns(2, gap="large")
-        with c1:
-            st.markdown("#### Inicio de centro")
-            fig_i = build_fig(ss.zone_inicio)
-            zone_i = capture_box(fig_i, "pitch_inicio")
-            if zone_i:
-                ss.zone_inicio = zone_i
-            st.caption(f"Zona inicio: {ss.zone_inicio if ss.zone_inicio else '—'}")
-            if st.button("🧹 Limpiar inicio"):
-                ss.zone_inicio = None
-                st.rerun()
-        with c2:
-            st.markdown("#### Finalización de centro")
-            fig_f = build_fig(ss.zone_final)
-            zone_f = capture_box(fig_f, "pitch_final")
-            if zone_f:
-                ss.zone_final = zone_f
-            st.caption(f"Zona finalización: {ss.zone_final if ss.zone_final else '—'}")
-            if st.button("🧹 Limpiar finalización"):
-                ss.zone_final = None
-                st.rerun()
+st.divider()
 
-    st.divider()
+# Aplicar filtros: primero generales, luego zonas
+df_after_general = apply_general_filters(df, selections)
+df_scope = apply_zone_filters(df_after_general, ss.zone_inicio, ss.zone_final)
 
-    # Aplicar filtros: primero generales, luego zonas
-    df_after_general = apply_general_filters(df, selections)
-    df_scope = apply_zone_filters(df_after_general, ss.zone_inicio, ss.zone_final)
+st.subheader("Situaciones principales")
+st.caption(f"Filas resultantes: {len(df_scope)} de {len(df)}")
+if "xg_corrected" in df_scope.columns:
+    st.dataframe(df_scope.sort_values(by="xg_corrected", ascending=False), use_container_width=True, hide_index=True)
+else:
+    st.dataframe(df_scope, use_container_width=True, hide_index=True)
 
-    st.subheader("Situaciones principales")
-    st.caption(f"Filas resultantes: {len(df_scope)} de {len(df)}")
-    st.dataframe(df_scope.sort_values(by='xg_corrected', ascending=False), use_container_width=True, hide_index=True)
-
-    st.divider()
-    st.subheader("Gráficas")
-
-    try:
-        fig_funnel = funnel_por_tipo(df_scope, open_label="Abierto", closed_label="Cerrado")
-        st.plotly_chart(fig_funnel, use_container_width=True)
-    except Exception as e:
-        st.warning(f"No se pudo construir el funnel: {e}")
+st.divider()
+st.subheader("Análisis Gráfico")
+try:
+    fig_funnel = funnel_por_tipo(df_scope, open_label="Abierto", closed_label="Cerrado")
+    st.plotly_chart(fig_funnel, use_container_width=True)
+except Exception as e:
+    st.warning(f"No se pudo construir el funnel: {e}")
