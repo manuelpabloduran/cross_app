@@ -1,20 +1,17 @@
 # main.py
-import base64, os
+import os, base64
 import streamlit as st
 import plotly.graph_objects as go
 
-# --- config ---
-st.set_page_config(page_title="Rectángulo en pitch Opta", page_icon="⚽", layout="centered")
+st.set_page_config(page_title="Box select en pitch Opta (0,0 abajo-izq)", page_icon="⚽")
 
-# --- ruta de tu imagen ---
-# Colocá 'pitch_opta.png' (o .jpg) en la carpeta raíz del repo/app.
+# --------- Cargar tu imagen ---------
 CANDIDATES = ["pitch_opta.png", "pitch_opta.jpg", "pitch_opta.jpeg"]
-PITCH_PATH = next((p for p in CANDIDATES if os.path.exists(p)), None)
-if not PITCH_PATH:
-    st.error("No encontré 'pitch_opta' (png/jpg) en el repo. Ponelo en la raíz y recargá.")
+IMG_PATH = next((p for p in CANDIDATES if os.path.exists(p)), None)
+if not IMG_PATH:
+    st.error("No encontré 'pitch_opta.(png/jpg/jpeg)' en la raíz del repo.")
     st.stop()
 
-# --- util: leer imagen y pasarla a data URL ---
 def image_data_url(path: str) -> str:
     with open(path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
@@ -22,58 +19,52 @@ def image_data_url(path: str) -> str:
     mime = "jpeg" if ext in ("jpg", "jpeg") else "png"
     return f"data:image/{mime};base64,{b64}"
 
-# --- figura: fondo + capa de puntos invisibles para selección ---
-def build_fig(zone=None):
+# --------- Figura base (sin necesidad de pan) ---------
+def build_base_fig():
     fig = go.Figure()
+    # Ejes: 0..100 en X y 0..100 en Y (Y hacia arriba). ¡Nada invertido!
     fig.update_layout(
         height=620,
         margin=dict(l=10, r=10, t=10, b=10),
-        xaxis=dict(range=[0,100], constrain="domain", scaleanchor="y", scaleratio=1, visible=False),
-        yaxis=dict(range=[100,0], visible=False),  # Opta: (0,0) arriba-izq
-        dragmode="select"  # arrastrar = box select
+        xaxis=dict(range=[0, 100], visible=False, scaleanchor="y", scaleratio=1),
+        yaxis=dict(range=[0, 100], visible=False),
+        dragmode="select"   # arrastrar = box select
     )
+    # Imagen anclada a ESQUINA INFERIOR IZQUIERDA (xanchor=left, yanchor=bottom)
     fig.add_layout_image(dict(
-        source=image_data_url(PITCH_PATH),
+        source=image_data_url(IMG_PATH),
         xref="x", yref="y",
-        x=0, y=100, sizex=100, sizey=100,
-        xanchor="left", yanchor="top",
+        x=0, y=0,                  # esquina inferior-izquierda
+        sizex=100, sizey=100,      # cubre 0..100 x 0..100
+        xanchor="left", yanchor="bottom",
         sizing="stretch",
         layer="below"
     ))
-    # malla de puntos "invisible" (seleccionables) para que funcione box select
-    step = 1  # precisión 1 unidad Opta → 101x101 = 10201 puntos (ok con Scattergl)
-    xs = [xx for xx in range(0,101,step) for _ in range(0,101,step)]
-    ys = [yy for _ in range(0,101,step) for yy in range(0,101,step)]
+    # Malla de puntos “fantasma” (seleccionables) para que el box select emita eventos
+    step = 1  # precisión de 1 unidad Opta
+    xs = [xx for xx in range(0, 101, step) for _ in range(0, 101, step)]
+    ys = [yy for _ in range(0, 101, step) for yy in range(0, 101, step)]
     fig.add_trace(go.Scattergl(
         x=xs, y=ys, mode="markers",
-        marker=dict(size=5, opacity=0.01),  # casi invisibles pero seleccionables
+        marker=dict(size=5, opacity=0.01),  # casi invisibles, pero seleccionables
         hoverinfo="skip", showlegend=False
     ))
-    # si ya hay zona guardada, dibujarla (opcional)
-    if zone:
-        fig.add_shape(
-            type="rect",
-            x0=zone["x0"], x1=zone["x1"], y0=zone["y0"], y1=zone["y1"],
-            line=dict(color="orange", width=2),
-            fillcolor="rgba(255,165,0,0.30)",
-            layer="above",
-        )
     return fig
 
-# --- estado ---
+# Estado: la última zona seleccionada
 if "zone" not in st.session_state:
     st.session_state.zone = None
 
-st.title("Seleccioná un rectángulo en tu pitch Opta (0–100)")
-st.caption("Arrastrá dentro del campo para box-select. El eje Y está invertido: 0 arriba → 100 abajo.")
+st.title("Seleccioná un rectángulo (0,0 abajo-izq • X→derecha • Y→arriba)")
+st.caption("Arrastrá dentro del campo para box-select. No hace falta panear.")
 
-fig = build_fig(zone=st.session_state.zone)
+fig = build_base_fig()
 
-# --- capturar selección ---
+# Capturar selección
 try:
-    from streamlit_plotly_events2 import plotly_events  # si lo tenés
+    from streamlit_plotly_events2 import plotly_events
 except Exception:
-    from streamlit_plotly_events import plotly_events   # lib estándar
+    from streamlit_plotly_events import plotly_events
 
 selected = plotly_events(
     fig,
@@ -81,9 +72,9 @@ selected = plotly_events(
     override_width="100%", override_height=620, key="pitch"
 )
 
-# --- calcular bounding box y mostrar ---
+# Calcular bounding box (x0,x1,y0,y1) y guardarlo
 if selected:
-    # Soportar ambas formas de retorno (lista de puntos o dict con 'points')
+    # Algunas versiones devuelven lista de puntos; otras, dict con 'points'
     if isinstance(selected, list) and selected and isinstance(selected[0], dict) and "x" in selected[0]:
         pts = selected
     elif isinstance(selected[-1], dict) and "points" in selected[-1]:
@@ -98,13 +89,11 @@ if selected:
         y0, y1 = min(ys), max(ys)
         clamp = lambda v: max(0.0, min(100.0, v))
         st.session_state.zone = {
-            "x0": round(clamp(x0), 2),
-            "x1": round(clamp(x1), 2),
-            "y0": round(clamp(y0), 2),
-            "y1": round(clamp(y1), 2),
+            "x0": round(clamp(x0), 2), "x1": round(clamp(x1), 2),
+            "y0": round(clamp(y0), 2), "y1": round(clamp(y1), 2),
         }
 
-# --- output mínimo ---
+# Output mínimo
 if st.session_state.zone:
     z = st.session_state.zone
     st.success(f"Zona → x0={z['x0']}, x1={z['x1']} • y0={z['y0']}, y1={z['y1']}")
