@@ -1,16 +1,17 @@
-# Version: 2
-# Doble selector de zona (Inicio / Finalización) sobre 'pitch_opta'
+# Version: 2.1
+# Doble selector de zona (Inicio / Finalización) + carga y filtro de cross_stats.csv
 # Sistema de ejes: (0,0) abajo-izq; X→derecha; Y→arriba
 
 import os, base64
 import streamlit as st
 import plotly.graph_objects as go
+import pandas as pd
 
-st.set_page_config(page_title="Selección zonas: Inicio/Finalización", page_icon="⚽", layout="wide")
+st.set_page_config(page_title="Zonas Inicio/Final + Filtro DF", page_icon="⚽", layout="wide")
 
 # ---------- cargar imagen 'pitch_opta' ----------
-CANDIDATES = ["pitch_opta.png", "pitch_opta.jpg", "pitch_opta.jpeg"]
-IMG_PATH = next((p for p in CANDIDATES if os.path.exists(p)), None)
+CANDIDATES_IMG = ["pitch_opta.png", "pitch_opta.jpg", "pitch_opta.jpeg"]
+IMG_PATH = next((p for p in CANDIDATES_IMG if os.path.exists(p)), None)
 if not IMG_PATH:
     st.error("No encontré 'pitch_opta.(png/jpg/jpeg)' en la raíz del repo.")
     st.stop()
@@ -47,12 +48,12 @@ def build_fig(zone=None):
         layer="below"
     ))
     # malla de puntos “fantasma” para que el box-select emita eventos
-    step = 1  # precisión: 1 unidad Opta
+    step = 1
     xs = [xx for xx in range(0,101,step) for _ in range(0,101,step)]
     ys = [yy for _ in range(0,101,step) for yy in range(0,101,step)]
     fig.add_trace(go.Scattergl(
         x=xs, y=ys, mode="markers",
-        marker=dict(size=5, opacity=0.01),  # casi invisibles pero seleccionables
+        marker=dict(size=5, opacity=0.01),
         hoverinfo="skip", showlegend=False
     ))
     # dibujar zona si existe
@@ -115,9 +116,44 @@ def select_zone_ui(title: str, state_key: str, widget_key: str):
             st.session_state[state_key] = None
             st.rerun()
 
+# ---------- carga del CSV ----------
+def load_cross_stats():
+    candidates = ["cross_stats.csv", "data/cross_stats.csv", "dataset/cross_stats.csv"]
+    path = next((p for p in candidates if os.path.exists(p)), None)
+    if path is None:
+        st.error("No encontré 'cross_stats.csv' (probé en raíz, /data y /dataset).")
+        return None
+    df = pd.read_csv(path)
+    # asegurar tipos numéricos en las columnas que filtramos
+    for c in ["x", "y", "endX", "endY"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+# ---------- filtros ----------
+def apply_inicio_filter(df: pd.DataFrame, zi: dict):
+    if df is None or zi is None:
+        return df
+    req_cols = {"x", "y"}
+    if not req_cols.issubset(df.columns):
+        st.warning("El DF no tiene columnas 'x' y 'y' para filtrar por INICIO.")
+        return df
+    x0, x1, y0, y1 = zi["x0"], zi["x1"], zi["y0"], zi["y1"]
+    return df[df["x"].between(x0, x1) & df["y"].between(y0, y1)]
+
+def apply_final_filter(df: pd.DataFrame, zf: dict):
+    if df is None or zf is None:
+        return df
+    req_cols = {"endX", "endY"}
+    if not req_cols.issubset(df.columns):
+        st.warning("El DF no tiene columnas 'endX' y 'endY' para filtrar por FINALIZACIÓN.")
+        return df
+    x0, x1, y0, y1 = zf["x0"], zf["x1"], zf["y0"], zf["y1"]
+    return df[df["endX"].between(x0, x1) & df["endY"].between(y0, y1)]
+
 # ---------- UI ----------
-st.title("Zonas de INICIO y FINALIZACIÓN de centro")
-st.caption("Sistema de ejes: (0,0) abajo-izq • X→derecha • Y→arriba")
+st.title("Zonas de INICIO y FINALIZACIÓN de centro + filtro de cross_stats")
+st.caption("Ejes: (0,0) abajo-izq • X→derecha • Y→arriba")
 
 c1, c2 = st.columns(2, gap="large")
 with c1:
@@ -126,9 +162,35 @@ with c2:
     select_zone_ui("Finalización de centro", "zone_final", "pitch_final")
 
 st.divider()
-st.subheader("Resumen")
-z1, z2 = st.session_state.zone_inicio, st.session_state.zone_final
-st.write({
-    "inicio": z1 if z1 else None,
-    "finalizacion": z2 if z2 else None
-})
+st.subheader("Validación rápida con cross_stats.csv")
+
+df = load_cross_stats()
+if df is not None:
+    zi = st.session_state.zone_inicio
+    zf = st.session_state.zone_final
+
+    # filtrados
+    df_inicio = apply_inicio_filter(df, zi) if zi else None
+    df_final  = apply_final_filter(df, zf) if zf else None
+    df_both   = df.copy()
+    if zi: df_both = apply_inicio_filter(df_both, zi)
+    if zf: df_both = apply_final_filter(df_both, zf)
+
+    # mostrar heads
+    with st.expander("DF original (head)", expanded=False):
+        st.dataframe(df.head(), use_container_width=True, hide_index=True)
+
+    if zi is not None:
+        with st.expander("Filtrado por INICIO (x,y) — head", expanded=True):
+            st.caption(f"Filas: {0 if df_inicio is None else len(df_inicio)}")
+            st.dataframe((df_inicio.head() if df_inicio is not None else pd.DataFrame()), use_container_width=True, hide_index=True)
+    if zf is not None:
+        with st.expander("Filtrado por FINALIZACIÓN (endX,endY) — head", expanded=True):
+            st.caption(f"Filas: {0 if df_final is None else len(df_final)}")
+            st.dataframe((df_final.head() if df_final is not None else pd.DataFrame()), use_container_width=True, hide_index=True)
+    if zi is not None or zf is not None:
+        with st.expander("Filtrado COMBINADO (aplica INICIO y FINAL si existen) — head", expanded=True):
+            st.caption(f"Filas: {len(df_both)}")
+            st.dataframe(df_both.head(), use_container_width=True, hide_index=True)
+else:
+    st.info("Cuando el CSV esté disponible, se mostrará aquí el head y los filtrados.")
