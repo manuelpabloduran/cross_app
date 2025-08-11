@@ -24,9 +24,8 @@ def funnel_por_tipo(df_scope: pd.DataFrame, open_label="Abierto", closed_label="
         if missing:
             raise ValueError(f"Faltan columnas requeridas: {missing}")
 
-        mask_tipo = (df["cross_tipo"] == cross_type)
         total = len(df)
-        n_tipo = int(mask_tipo.sum())
+        n_tipo = int((df["cross_tipo"] == cross_type).sum())
         n_success = int(((df["cross_tipo"] == cross_type) & (df["outcome_type"] == "Successful")).sum())
         n_shot = int(((df["cross_tipo"] == cross_type) &
                       (df["outcome_type"] == "Successful") &
@@ -69,7 +68,13 @@ def funnel_por_tipo(df_scope: pd.DataFrame, open_label="Abierto", closed_label="
         fig.add_trace(tr, row=1, col=2)
 
     fig.update_traces(textposition="inside", textfont_size=14)
-    fig.update_layout(title_text="Embudo de Centros por tipo", showlegend=False)
+    fig.update_layout(
+        title_text="Embudo de Centros por tipo",
+        showlegend=False,
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(color="black"),
+    )
     return fig
 
 # ---------------------------------------------
@@ -83,7 +88,10 @@ def trayectorias_por_resultado(
     title='Trayectorias de centros por resultado'
 ):
     pitch = Pitch(pitch_type='opta', pitch_color='white', line_color='black')
-    fig, ax = pitch.draw(figsize=figsize)
+    fig, ax = pitch.draw(figsize=figsize, tight_layout=True)
+    fig.patch.set_alpha(1.0)           # <- sin transparencia (fondo blanco)
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
 
     for outcome, color in zip(['Successful', 'Unsuccessful'], ['green', 'red']):
         if outcome_col not in df.columns:
@@ -93,11 +101,11 @@ def trayectorias_por_resultado(
             pitch.arrows(
                 df_out[x_col], df_out[y_col],
                 df_out[end_x_col], df_out[end_y_col],
-                color=color, ax=ax, label=outcome, alpha=0.05, width=1.5
+                color=color, ax=ax, label=outcome, alpha=0.12, width=1.5
             )
 
     ax.legend(loc='upper left')
-    ax.set_title(title, fontsize=14)
+    ax.set_title(title, fontsize=14, color="black")
     fig.tight_layout()
     return fig
 
@@ -110,9 +118,9 @@ def heatmap_flow_triptych(
     outcome_col='outcome_type',
     bins=(18, 16),
     figsize=(18, 10),
-    facecolor='#22312b'
+    facecolor='white'
 ):
-    pitch = Pitch(pitch_type='opta', line_zorder=2, line_color='#c7d5cc', pitch_color=facecolor)
+    pitch = Pitch(pitch_type='opta', line_zorder=2, line_color='#222222', pitch_color='white')
     df_all = df
     df_succ = df[df[outcome_col] == 'Successful'] if outcome_col in df.columns else df.iloc[0:0]
     df_fail = df[df[outcome_col] == 'Unsuccessful'] if outcome_col in df.columns else df.iloc[0:0]
@@ -128,18 +136,21 @@ def heatmap_flow_triptych(
     )
 
     fig, axs = plt.subplots(1, 3, figsize=figsize, constrained_layout=True)
-    fig.set_facecolor(facecolor)
+    fig.patch.set_facecolor(facecolor)
+    fig.patch.set_alpha(1.0)
+    for ax in axs:
+        ax.set_facecolor("white")
 
     def draw_panel(ax, df_src, bs_heatmap, title, cmap):
         pitch.draw(ax=ax)
-        pitch.heatmap(bs_heatmap, ax=ax, cmap=cmap, vmin=0, vmax=vmax)
+        pitch.heatmap(bs_heatmap, ax=ax, cmap=cmap, vmin=0, vmax=vmax, edgecolors="white")
         if not df_src.empty:
             pitch.flow(
                 df_src[x_col], df_src[y_col], df_src[end_x_col], df_src[end_y_col],
                 color='black', arrow_type='scale', arrow_length=10,
                 bins=bins, ax=ax
             )
-        ax.set_title(title, color='white', fontsize=14)
+        ax.set_title(title, color='black', fontsize=14)
 
     draw_panel(axs[0], df_all,  bs_all,  'Centros - Todos',      cmap='Blues')
     draw_panel(axs[1], df_succ, bs_succ, 'Centros - Exitosos',    cmap='Greens')
@@ -157,13 +168,16 @@ def heatmap_count_effectiveness(
     outcome_value_col='outcome_value',
     bins=(19, 9),
     figsize=(14, 5),
-    facecolor='#22312b'
+    facecolor='white'
 ):
     pitch = Pitch(pitch_type='opta', line_zorder=2,
-                  pitch_color=facecolor, line_color="#f9f2f2")
+                  pitch_color='white', line_color="#222222")
 
     fig, axs = plt.subplots(1, 2, figsize=figsize, constrained_layout=True)
-    fig.set_facecolor(facecolor)
+    fig.patch.set_facecolor(facecolor)
+    fig.patch.set_alpha(1.0)
+    for ax in axs:
+        ax.set_facecolor("white")
 
     # 1) Conteo absoluto
     pitch.draw(ax=axs[0])
@@ -175,7 +189,7 @@ def heatmap_count_effectiveness(
     bs_count_plot = bs_count.copy()
     bs_count_plot['statistic'] = counts
     pcm1 = pitch.heatmap(bs_count_plot, ax=axs[0], cmap='Blues',
-                         vmin=0, vmax=vmax_count, edgecolors=facecolor)
+                         vmin=0, vmax=vmax_count, edgecolors='white')
 
     cx, cy = bs_count['cx'], bs_count['cy']
     for i in range(counts.shape[0]):
@@ -184,8 +198,8 @@ def heatmap_count_effectiveness(
             if not np.isnan(val):
                 pitch.annotate(f"{int(val)}", (cx[i, j], cy[i, j]),
                                ax=axs[0], ha='center', va='center',
-                               color='#110f0f', fontsize=7)
-    axs[0].set_title("Conteo de centros por zona", color='#110f0f')
+                               color='black', fontsize=7)
+    axs[0].set_title("Conteo de centros por zona", color='black')
 
     # 2) % Efectividad
     pitch.draw(ax=axs[1])
@@ -195,7 +209,6 @@ def heatmap_count_effectiveness(
     elif outcome_col in df.columns:
         mask_succ = (df[outcome_col] == 'Successful')
     else:
-        # si no hay ninguna, no podemos calcular efectividad
         mask_succ = pd.Series(False, index=df.index)
 
     bs_count2 = pitch.bin_statistic(df[x_col], df[y_col], statistic='count', bins=bins)
@@ -211,7 +224,7 @@ def heatmap_count_effectiveness(
     bs_pct['statistic'] = success_pct
 
     pcm2 = pitch.heatmap(bs_pct, ax=axs[1], cmap='Greens',
-                         vmin=0, vmax=100, edgecolors=facecolor)
+                         vmin=0, vmax=100, edgecolors='white')
 
     cx, cy = bs_count2['cx'], bs_count2['cy']
     for i in range(success_pct.shape[0]):
@@ -220,14 +233,14 @@ def heatmap_count_effectiveness(
             if not np.isnan(val):
                 pitch.annotate(f"{val:.0f}%", (cx[i, j], cy[i, j]),
                                ax=axs[1], ha='center', va='center',
-                               color='#110f0f', fontsize=7)
-    axs[1].set_title("Efectividad de centros x zona", color='#110f0f')
+                               color='black', fontsize=7)
+    axs[1].set_title("Efectividad de centros x zona", color='black')
 
     # Colorbars
     cbar1 = fig.colorbar(pcm1, ax=axs[0], shrink=0.6)
-    cbar1.set_label('Conteo', color="#000000")
+    cbar1.set_label('Conteo', color="black")
     cbar2 = fig.colorbar(pcm2, ax=axs[1], shrink=0.6)
-    cbar2.set_label('% efectividad', color="#000000")
+    cbar2.set_label('% efectividad', color="black")
 
     return fig
 
@@ -244,7 +257,7 @@ def triple_plot_by_zone(
     modo='sum',                  # 'sum', 'mean', etc.
     bin_size=3,
     title='',
-    min_end_x=75                 # filtro de finalización hacia el área
+    min_end_x=75
 ):
     x_min, x_max, y_min, y_max = rectangle_limits
 
@@ -255,18 +268,19 @@ def triple_plot_by_zone(
     if end_x_col in df_zone.columns:
         df_zone = df_zone[df_zone[end_x_col] >= min_end_x]
 
-    # Figura 1x3
     fig, axs = plt.subplots(1, 3, figsize=(21, 6))
-    fig.patch.set_facecolor('black')
+    fig.patch.set_facecolor('white')
+    fig.patch.set_alpha(1.0)
+
     pitch = Pitch('opta',
-                  pitch_color="#5f8b2d",
-                  line_color='white',
+                  pitch_color="#e9f6e9",   # césped claro, sin transparencia
+                  line_color='black',
                   stripe=True,
-                  stripe_color='#c2d59d')
+                  stripe_color='#cfe8c9')
 
     # 1) Scatter de finalizaciones (tamaño según valor)
     pitch.draw(ax=axs[0], tight_layout=False)
-    axs[0].set_title('Puntos de Remate (Tamaño según valor)', color='white', fontsize=12)
+    axs[0].set_title('Puntos de Remate (Tamaño según valor)', color='black', fontsize=12)
     if not df_zone.empty and value_col in df_zone.columns:
         sizes = (pd.to_numeric(df_zone[value_col], errors="coerce").fillna(0.0) * 100).clip(lower=1.0)
         pitch.scatter(df_zone[end_x_col], df_zone[end_y_col], ax=axs[0],
@@ -274,7 +288,7 @@ def triple_plot_by_zone(
 
     # 2) KDE ponderado por value
     pitch.draw(ax=axs[1], tight_layout=False)
-    axs[1].set_title('Mapa de calor (KDE) zonas de remate', color='white', fontsize=12)
+    axs[1].set_title('Mapa de calor (KDE) zonas de remate', color='black', fontsize=12)
     if not df_zone.empty and value_col in df_zone.columns:
         sns.kdeplot(
             x=df_zone[end_x_col], y=df_zone[end_y_col],
@@ -285,7 +299,7 @@ def triple_plot_by_zone(
 
     # 3) Heatmap por bins (agregando value por 'modo')
     pitch.draw(ax=axs[2], tight_layout=False)
-    axs[2].set_title('Acumulado de valor por zona', color='white', fontsize=12)
+    axs[2].set_title('Acumulado de valor por zona', color='black', fontsize=12)
 
     x_bins = np.arange(70, 101, bin_size)
     y_bins = np.arange(0, 101, bin_size)
@@ -316,13 +330,11 @@ def triple_plot_by_zone(
                     axs[2].text(x_grid[i, j] + 1.5, y_grid[i, j] - 1.5, f'{val:.2f}',
                                 color='black', fontsize=6, ha='center', va='center')
 
-    # Dibujar rectángulo de origen
+    # Dibujar rectángulo de origen (no transparente)
     for ax in axs:
-        # Relleno blanco semi-transparente
         filled_rect = plt.Rectangle((x_min, y_min), x_max - x_min, y_max - y_min,
-                                    linewidth=0, facecolor='white', alpha=0.65, zorder=3)
+                                    linewidth=0, facecolor='white', alpha=0.85, zorder=3)
         ax.add_patch(filled_rect)
-        # Borde magenta
         border_rect = plt.Rectangle((x_min, y_min), x_max - x_min, y_max - y_min,
                                     linewidth=2, edgecolor='magenta', facecolor='none', zorder=4)
         ax.add_patch(border_rect)
@@ -338,7 +350,8 @@ def triple_plot_by_zone(
 
     for ax in axs:
         ax.set_xlim(60, 100)
+        ax.set_facecolor("white")
 
     fig.subplots_adjust(wspace=0.1, left=0.03, right=0.97, top=0.85, bottom=0.05)
-    plt.suptitle(f'{zone_name} - {title}', color='white', fontsize=16)
+    plt.suptitle(f'{zone_name} - {title}', color='black', fontsize=16)
     return fig

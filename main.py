@@ -1,8 +1,8 @@
-# Version: 2.5
+# Version: 2.6
 # Sidebar con filtros generales (multiselects + binarios + slider xG)
 # Selector opcional de zonas (Inicio / Finalización) sobre 'pitch_opta'
 # Filtro combinado: primero filtros generales, luego zonas (uno o ambos)
-# Tabla de resultados y gráficos usando chart_cross.*
+# Gráficos (chart_cross.*) y luego "Situaciones principales" al final
 
 import os, base64
 import streamlit as st
@@ -89,8 +89,10 @@ def load_cross_stats():
     for c in ["Chipped", "Keypass"]:
         if c in df.columns:
             df[c] = _coerce_binary(df[c])
-    
-    df['xg_corrected'] = df['xg_corrected'].fillna(0)
+
+    # evitar perder casos con xg vacíos
+    if "xg_corrected" in df.columns:
+        df["xg_corrected"] = df["xg_corrected"].fillna(0)
 
     return df
 
@@ -102,7 +104,9 @@ def build_fig(zone=None):
         margin=dict(l=10, r=10, t=10, b=10),
         xaxis=dict(range=[0, 100], visible=False, scaleanchor="y", scaleratio=1),
         yaxis=dict(range=[0, 100], visible=False),   # (0,0) abajo-izq; Y↑
-        dragmode="select"
+        dragmode="select",
+        paper_bgcolor="white",
+        plot_bgcolor="white",
     )
     fig.add_layout_image(dict(
         source=image_data_url(IMG_PATH),
@@ -110,6 +114,7 @@ def build_fig(zone=None):
         x=0, y=0, sizex=100, sizey=100,
         xanchor="left", yanchor="bottom",
         sizing="stretch",
+        opacity=1.0,          # <- sin transparencia
         layer="below"
     ))
     # malla de puntos “fantasma” para que el box-select emita eventos
@@ -340,14 +345,6 @@ st.divider()
 df_after_general = apply_general_filters(df, selections)
 df_scope = apply_zone_filters(df_after_general, ss.zone_inicio, ss.zone_final)
 
-st.subheader("Situaciones principales")
-st.caption(f"Filas resultantes: {len(df_scope)} de {len(df)}")
-if not df_scope.empty and "xg_corrected" in df_scope.columns:
-    st.dataframe(df_scope.sort_values(by="xg_corrected", ascending=False), use_container_width=True, hide_index=True)
-else:
-    st.dataframe(df_scope, use_container_width=True, hide_index=True)
-
-st.divider()
 st.subheader("Análisis Gráfico")
 
 # 1) Funnel (Plotly)
@@ -388,7 +385,7 @@ if ss.zone_inicio:
             zone_name="Centro desde zona seleccionada",
             rectangle_limits=rect,
             title="",
-            modo="sum",           # 'sum' / 'mean' / etc. (según necesidad)
+            modo="sum",
             bin_size=3
         )
         st.pyplot(fig_tz, use_container_width=True)
@@ -396,3 +393,13 @@ if ss.zone_inicio:
         st.warning(f"Triple plot por zona: {e}")
 else:
     st.info("Para el triple plot, seleccioná primero una Zona de Inicio en el selector de zonas.")
+
+st.divider()
+
+# ---- Situaciones principales (AL FINAL) ----
+st.subheader("Situaciones principales")
+st.caption(f"Filas resultantes: {len(df_scope)} de {len(df)}")
+if not df_scope.empty and "xg_corrected" in df_scope.columns:
+    st.dataframe(df_scope.sort_values(by="xg_corrected", ascending=False), use_container_width=True, hide_index=True)
+else:
+    st.dataframe(df_scope, use_container_width=True, hide_index=True)
