@@ -344,8 +344,7 @@ def heatmap_pct_shot_by_zone(
         mask = pd.Series(False, index=df.index)
     return _heatmap_pct_by_zone_core(
         df, mask, x_col=x_col, y_col=y_col, bins=bins, figsize=figsize,
-        title_pct="% que termina en Tiro", show_count=show_count, facecolor=facecolor
-    )
+        title_pct="% que termina en Tiro", show_count=show_count, facecolor=facecolor)
 
 def heatmap_pct_goal_by_zone(
     df: pd.DataFrame,
@@ -361,8 +360,7 @@ def heatmap_pct_goal_by_zone(
         mask = pd.Series(False, index=df.index)
     return _heatmap_pct_by_zone_core(
         df, mask, x_col=x_col, y_col=y_col, bins=bins, figsize=figsize,
-        title_pct="% que termina en Gol", show_count=show_count, facecolor=facecolor
-    )
+        title_pct="% que termina en Gol", show_count=show_count, facecolor=facecolor)
 
 
 # ------------------------------------------------------------
