@@ -113,7 +113,7 @@ def load_cross_stats():
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    for c in ["Chipped", "Keypass"]:
+    for c in ["Chipped", "KeyPass"]:
         if c in df.columns:
             df[c] = _coerce_binary(df[c])
 
@@ -203,7 +203,7 @@ FILTER_KEYS = {
     "tipo": "cross_tipo",
     "pie": "cross_pie",
     "chipped": "Chipped",
-    "keypass": "Keypass",
+    "keypass": "KeyPass",
 }
 
 def general_filter_panel(df: pd.DataFrame):
@@ -411,7 +411,7 @@ st.subheader("Situaciones principales")
 st.caption(f"Filas resultantes: {len(df_scope)} de {len(df)}")
 if not df_scope.empty and "xg_corrected" in df_scope.columns:
     col_to_show = ['TeamName','TeamRival','fecha','Competencia','Temporada','minute','second',
-                   'jugador', 'ultimo_event_name','cross_tipo','cross_pie','xA','xT','xg_corrected','Chipped','Keypass']
+                   'jugador', 'ultimo_event_name','cross_tipo','cross_pie','xA','xT','xg_corrected','Chipped','KeyPass']
     st.dataframe(df_scope[col_to_show].sort_values(by="xg_corrected", ascending=False), use_container_width=True, hide_index=True)
 else:
     st.dataframe(df_scope, use_container_width=True, hide_index=True)
