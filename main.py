@@ -8,6 +8,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 import streamlit.components.v1 as components  # <-- para el botón de imprimir
+import numpy as np
 
 from chart_cross import (
     funnel_por_tipo,
@@ -57,17 +58,48 @@ def reset_filtros_callback():
         st.session_state["flt_xg"] = st.session_state["flt_xg_default"]
 
 # ---------- carga del CSV ----------
+
 def _coerce_binary(series: pd.Series) -> pd.Series:
-    if series.dtype == bool:
-        return series.astype("Int64").replace({True: 1, False: 0})
+    """
+    Normaliza una serie binaria a 0/1.
+    - NaN/None/''/espacios -> 0
+    - true/false, yes/no, y/n, si/sí -> 1/0
+    - '1'/'0' y 1.0/0.0 -> 1/0
+    Devuelve dtype Int64 (nullable).
+    """
     s = series.copy()
+
+    # Caso dtype booleano (incluye pandas BooleanDtype con NA)
+    if pd.api.types.is_bool_dtype(s):
+        # Si es 'boolean' (nullable), rellena NA con 0; si es 'bool' puro no hay NA
+        try:
+            s = s.astype("Int64").fillna(0)
+        except Exception:
+            s = s.astype("Int64")
+        return s
+
+    # 1) NaN/None -> 0
+    s = s.where(~s.isna(), 0)
+
+    # 2) Strings vacíos o espacios -> 0 (sólo aplica a object/string)
+    if pd.api.types.is_object_dtype(s) or pd.api.types.is_string_dtype(s):
+        s = s.replace(r'^\s*$', 0, regex=True)
+
+    # 3) Reemplazos de tokens comunes
     s = s.replace({
         True: 1, False: 0,
         "true": 1, "false": 0, "True": 1, "False": 0,
-        "yes": 1, "no": 0, "Yes": 1, "No": 0
+        "yes": 1, "no": 0, "Yes": 1, "No": 0,
+        "y": 1, "n": 0, "Y": 1, "N": 0,
+        "si": 1, "sí": 1, "Si": 1, "Sí": 1,
+        "1": 1, "0": 0,
+        1.0: 1, 0.0: 0,
     })
-    s = pd.to_numeric(s, errors="coerce")
-    return s.astype("Int64")
+
+    # 4) A numérico; cualquier cosa rara -> NaN -> 0
+    s = pd.to_numeric(s, errors="coerce").fillna(0).astype("Int64")
+    return s
+
 
 def load_cross_stats():
     candidates = ["cross_stats.csv", "data/cross_stats.csv", "dataset/cross_stats.csv"]
