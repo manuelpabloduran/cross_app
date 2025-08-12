@@ -359,29 +359,23 @@ def triple_plot_by_zone(
 # -------------------------------------------------------------
 # 6) Trayectorias divididas por resultado (mplsoccer)
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from mplsoccer import Pitch
-
 def trayectorias_split_por_resultado(
     df: pd.DataFrame,
     x_col='x', y_col='y', end_x_col='endX', end_y_col='endY',
     outcome_col='outcome_type',
-    weight_col='xA',          # <- columna a usar para alpha en Successful
-    alpha_min=0.06,           # <- alpha mínimo para flechas con xA bajo
-    alpha_max=0.70,           # <- alpha máximo para xA alto
-    alpha_unsuccess=0.10,     # <- alpha uniforme para Unsuccessful
+    weight_col='xA',          # columna que pondera alpha en Successful
+    alpha_min=0.06,           # alpha mínimo para xA bajo
+    alpha_max=0.70,           # alpha máximo para xA alto
+    alpha_unsuccess=0.10,     # alpha uniforme para Unsuccessful
     figsize=(16, 6),
-    max_success_arrows=None,  # p.ej. 3000 si querés limitar por performance
+    max_arrows=None,          # <-- límite para ambos paneles
 ):
     """
-    Dibuja dos paneles lado a lado:
-      - Izq: outcome_type == 'Successful' (verde) con alpha ~ weight_col (xA)
-      - Der: outcome_type == 'Unsuccessful' (rojo) con alpha fijo
-
-    Si `weight_col` no existe o no tiene datos, cae en alpha uniforme.
-    Fondo blanco y textos negros (no transparente).
+    Dos paneles: Successful (izq, alpha ~ weight_col) y Unsuccessful (der, alpha fijo).
+    - Successful: si max_arrows se define, toma los TOP N por weight_col (desc).
+      Si weight_col no existe/no es numérico, toma los primeros N.
+    - Unsuccessful: si max_arrows se define, toma los primeros N.
+    Fondo blanco, textos negros.
     """
     pitch = Pitch(pitch_type='opta', pitch_color='white', line_color='black')
     fig, axs = plt.subplots(1, 2, figsize=figsize, constrained_layout=True)
@@ -397,37 +391,42 @@ def trayectorias_split_por_resultado(
     # -----------------------
     ax_succ = axs[0]
     pitch.draw(ax=ax_succ, tight_layout=False)
-    ax_succ.set_title("Trayectorias - Exitosos (alpha ~ xA)", fontsize=14, color="black")
+    ax_succ.set_title("Trayectorias - Exitosos (alpha ~ Variable de interés)", fontsize=14, color="black")
 
-    succ = df[df[outcome_col] == 'Successful'] if outcome_col in df.columns else df.iloc[0:0]
+    if outcome_col in df.columns:
+        succ = df[df[outcome_col] == 'Successful'].copy()
+    else:
+        succ = df.iloc[0:0].copy()
+
+    # Selección top N por weight_col si procede
+    use_weight = (weight_col in succ.columns)
+    if use_weight:
+        w = pd.to_numeric(succ[weight_col], errors='coerce')
+        use_weight = w.notna().any()
+    if max_arrows and max_arrows > 0 and not succ.empty:
+        if use_weight:
+            succ = succ.assign(_w=pd.to_numeric(succ[weight_col], errors='coerce').fillna(-np.inf))
+            succ = succ.nlargest(max_arrows, columns="_w").drop(columns="_w")
+        else:
+            succ = succ.head(max_arrows)
+
     if not succ.empty:
-        # ¿tenemos columna de peso?
-        use_weight = weight_col in succ.columns
+        # calcular alphas
         if use_weight:
             w = pd.to_numeric(succ[weight_col], errors='coerce').fillna(0.0).astype(float)
             wmin, wmax = float(w.min()), float(w.max())
-            # evitar división por 0
             rng = (wmax - wmin) if (wmax - wmin) > 1e-12 else 1.0
-            alphas = alpha_min + ( (w - wmin) / rng ) * (alpha_max - alpha_min)
+            alphas = alpha_min + ((w - wmin) / rng) * (alpha_max - alpha_min)
         else:
             alphas = pd.Series(alpha_max, index=succ.index)
 
-        # (opcional) limitar cantidad por performance
-        if max_success_arrows is not None and len(succ) > max_success_arrows:
-            # muestreamos priorizando alphas más altos (xA alto)
-            take_idx = alphas.sort_values(ascending=False).head(max_success_arrows).index
-            succ = succ.loc[take_idx]
-            alphas = alphas.loc[take_idx]
-
-        # Dibujo flecha a flecha para poder variar alpha
-        # (orden: primero las más transparentes, luego las más opacas)
+        # para respetar alpha por flecha, dibujar en orden (menos a más opacas)
         order = np.argsort(alphas.values)
         xs = succ[x_col].values
         ys = succ[y_col].values
         xe = succ[end_x_col].values
         ye = succ[end_y_col].values
         a  = alphas.values
-
         for i in order:
             pitch.arrows(xs[i], ys[i], xe[i], ye[i],
                          color='green', ax=ax_succ, alpha=float(a[i]), width=1.5)
@@ -439,7 +438,14 @@ def trayectorias_split_por_resultado(
     pitch.draw(ax=ax_fail, tight_layout=False)
     ax_fail.set_title("Trayectorias - No Exitosos", fontsize=14, color="black")
 
-    fail = df[df[outcome_col] == 'Unsuccessful'] if outcome_col in df.columns else df.iloc[0:0]
+    if outcome_col in df.columns:
+        fail = df[df[outcome_col] == 'Unsuccessful'].copy()
+    else:
+        fail = df.iloc[0:0].copy()
+
+    if max_arrows and max_arrows > 0 and not fail.empty:
+        fail = fail.head(max_arrows)
+
     if not fail.empty:
         pitch.arrows(
             fail[x_col], fail[y_col], fail[end_x_col], fail[end_y_col],

@@ -367,7 +367,8 @@ except Exception as e:
 
 # 2) Trayectorias por resultado (dos paneles con alpha según Variable de interés)
 st.markdown("##### Trayectorias por resultado")
-# opciones disponibles según columnas presentes en el DF filtrado
+
+# Opciones disponibles según columnas presentes
 candidate_vars = ["xA", "xT", "xg_corrected"]
 available_vars = [c for c in candidate_vars if c in df_scope.columns]
 
@@ -375,10 +376,9 @@ if len(available_vars) == 0:
     st.info("No encontré columnas para ponderar alpha (xA, xT o xg_corrected). Se usará opacidad uniforme.")
     selected_weight = None
 else:
-    # valor por defecto persistente en la sesión (prioriza xA si existe)
     default_var = "xA" if "xA" in available_vars else available_vars[0]
     selected_weight = st.selectbox(
-        "Variable de interés (alpha ∝ valor)",
+        "Variable de interés",
         available_vars,
         index=available_vars.index(st.session_state.get("sel_weight_col", default_var))
             if st.session_state.get("sel_weight_col", default_var) in available_vars
@@ -387,18 +387,31 @@ else:
         help="Elegí qué variable pondera la opacidad de las flechas en los centros exitosos."
     )
 
+# Límite de flechas por panel (aplica a ambos)
+max_default = min(3000, len(df_scope)) if len(df_scope) > 0 else 1000
+upper_bound = max(100, min(10000, len(df_scope))) if len(df_scope) > 0 else 100
+max_n = st.slider(
+    "Máximo de flechas por panel",
+    min_value=100, max_value=max(100, upper_bound),
+    value=max_default if max_default >= 100 else 100,
+    step=100,
+    help="Aplica a ambos paneles: en Exitosos mantiene el Top N por la variable elegida; en No Exitosos toma los primeros N."
+)
+
 try:
+    from chart_cross import trayectorias_split_por_resultado
     fig_tray2 = trayectorias_split_por_resultado(
         df_scope,
         weight_col=selected_weight if selected_weight else "xg_corrected",  # fallback
         alpha_min=0.06,
         alpha_max=0.70,
         alpha_unsuccess=0.10,
-        max_success_arrows=100,  # opcional si tenés MUCHOS eventos
+        max_arrows=max_n,
     )
     st.pyplot(fig_tray2, use_container_width=True)
 except Exception as e:
     st.warning(f"Trayectorias (split): {e}")
+
 
 
 
