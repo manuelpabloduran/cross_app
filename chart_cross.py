@@ -244,6 +244,127 @@ def heatmap_count_effectiveness(
 
     return fig
 
+def _heatmap_pct_by_zone_core(
+    df: pd.DataFrame,
+    mask: pd.Series,
+    x_col='x', y_col='y',
+    bins=(19, 9),
+    figsize=(14, 5),
+    title_pct="Porcentaje por zona",
+    show_count=False,            # si True: figura 1x2 (conteo + %). Si False: sólo % (1x1)
+    facecolor='white'
+):
+    """Core: calcula % por zona con máscara booleana para el numerador."""
+    pitch = Pitch(pitch_type='opta', line_zorder=2, pitch_color='white', line_color="#222222")
+
+    if show_count:
+        fig, axs = plt.subplots(1, 2, figsize=figsize, constrained_layout=True)
+        ax_count, ax_pct = axs
+    else:
+        fig, ax_pct = plt.subplots(1, 1, figsize=(figsize[0]/2, figsize[1]), constrained_layout=True)  # más compacto
+        axs = [ax_pct]
+
+    fig.patch.set_facecolor(facecolor)
+    fig.patch.set_alpha(1.0)
+    for ax in axs:
+        ax.set_facecolor("white")
+
+    # Conteo total
+    bs_total = pitch.bin_statistic(df[x_col], df[y_col], statistic='count', bins=bins)
+
+    # Conteo numerador (condición True)
+    mask = mask.fillna(False)
+    bs_num = pitch.bin_statistic(
+        df.loc[mask, x_col],
+        df.loc[mask, y_col],
+        statistic='count', bins=bins
+    )
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        pct = (bs_num['statistic'] / bs_total['statistic']) * 100.0
+        pct = np.where(bs_total['statistic'] > 0, pct, np.nan)
+
+    # Panel conteo (opcional)
+    if show_count:
+        pitch.draw(ax=ax_count)
+        counts = bs_total['statistic'].astype(float)
+        counts[counts == 0] = np.nan
+        vmax_count = np.nanmax(counts)
+        bs_count_plot = bs_total.copy()
+        bs_count_plot['statistic'] = counts
+        pcm1 = pitch.heatmap(bs_count_plot, ax=ax_count, cmap='Blues',
+                             vmin=0, vmax=vmax_count, edgecolors='white')
+        cx, cy = bs_total['cx'], bs_total['cy']
+        for i in range(counts.shape[0]):
+            for j in range(counts.shape[1]):
+                val = counts[i, j]
+                if not np.isnan(val):
+                    pitch.annotate(f"{int(val)}", (cx[i, j], cy[i, j]),
+                                   ax=ax_count, ha='center', va='center',
+                                   color='black', fontsize=7)
+        ax_count.set_title("Conteo total", color='black')
+
+    # Panel porcentaje
+    pitch.draw(ax=ax_pct)
+    bs_pct = bs_total.copy()
+    bs_pct['statistic'] = pct
+    pcm2 = pitch.heatmap(bs_pct, ax=ax_pct, cmap='Oranges',
+                         vmin=0, vmax=100, edgecolors='white')
+
+    cx, cy = bs_total['cx'], bs_total['cy']
+    for i in range(pct.shape[0]):
+        for j in range(pct.shape[1]):
+            val = pct[i, j]
+            if not np.isnan(val):
+                pitch.annotate(f"{val:.0f}%", (cx[i, j], cy[i, j]),
+                               ax=ax_pct, ha='center', va='center',
+                               color='black', fontsize=7)
+    ax_pct.set_title(title_pct, color='black')
+
+    # Colorbars
+    if show_count:
+        cbar1 = fig.colorbar(pcm1, ax=ax_count, shrink=0.6)
+        cbar1.set_label('Conteo', color="black")
+    cbar2 = fig.colorbar(pcm2, ax=ax_pct, shrink=0.6)
+    cbar2.set_label('%', color="black")
+
+    return fig
+
+def heatmap_pct_shot_by_zone(
+    df: pd.DataFrame,
+    x_col='x', y_col='y',
+    shot_col='shot_related', shot_token='Shot Related',
+    bins=(19, 9), figsize=(14, 5),
+    show_count=False, facecolor='white'
+):
+    """% de centros que terminan en tiro por zona."""
+    if shot_col in df.columns:
+        mask = (df[shot_col] == shot_token)
+    else:
+        mask = pd.Series(False, index=df.index)
+    return _heatmap_pct_by_zone_core(
+        df, mask, x_col=x_col, y_col=y_col, bins=bins, figsize=figsize,
+        title_pct="% que termina en Tiro", show_count=show_count, facecolor=facecolor
+    )
+
+def heatmap_pct_goal_by_zone(
+    df: pd.DataFrame,
+    x_col='x', y_col='y',
+    goal_col='ultimo_event_name', goal_token='Goal',
+    bins=(19, 9), figsize=(14, 5),
+    show_count=False, facecolor='white'
+):
+    """% de centros que terminan en gol por zona."""
+    if goal_col in df.columns:
+        mask = (df[goal_col] == goal_token)
+    else:
+        mask = pd.Series(False, index=df.index)
+    return _heatmap_pct_by_zone_core(
+        df, mask, x_col=x_col, y_col=y_col, bins=bins, figsize=figsize,
+        title_pct="% que termina en Gol", show_count=show_count, facecolor=facecolor
+    )
+
+
 # ------------------------------------------------------------
 # 5) Triple plot por zona (scatter / KDE / heatmap de valores)
 # ------------------------------------------------------------

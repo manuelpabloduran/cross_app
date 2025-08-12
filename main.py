@@ -9,14 +9,16 @@ import plotly.graph_objects as go
 import pandas as pd
 import streamlit.components.v1 as components  # <-- para el botón de imprimir
 import numpy as np
-
 from chart_cross import (
     funnel_por_tipo,
-    trayectorias_split_por_resultado,   # ← añade esta
+    trayectorias_split_por_resultado,
     heatmap_flow_triptych,
     heatmap_count_effectiveness,
     triple_plot_by_zone,
+    heatmap_pct_shot_by_zone,
+    heatmap_pct_goal_by_zone,
 )
+
 
 
 st.set_page_config(page_title="Análisis de Centros • Filtros + Zonas", page_icon="⚽", layout="wide")
@@ -427,6 +429,26 @@ with tab_general:
     except Exception as e:
         st.warning(f"Conteo/Efectividad: {e}")
 
+    # --- Nueva fila: % que termina en tiro / % que termina en gol ---
+    st.subheader("Finalización: % que termina en tiro y gol por zona")
+
+    col_shot, col_goal = st.columns(2)
+    with col_shot:
+        try:
+            # show_count=False → figura compacta de 1 solo heatmap (sólo %)
+            fig_shot = heatmap_pct_shot_by_zone(df_scope, show_count=False, bins=(19, 9))
+            st.pyplot(fig_shot, use_container_width=True)
+        except Exception as e:
+            st.warning(f"% Tiro por zona: {e}")
+
+    with col_goal:
+        try:
+            fig_goal = heatmap_pct_goal_by_zone(df_scope, show_count=False, bins=(19, 9))
+            st.pyplot(fig_goal, use_container_width=True)
+        except Exception as e:
+            st.warning(f"% Gol por zona: {e}")
+
+    
     # 5) Triple plot por zona seleccionada
     st.subheader("Análisis x zona de finalizaciones a partir de zona seleccionada (usa Zona Inicio)")
     if ss.zone_inicio:
