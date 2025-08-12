@@ -386,7 +386,7 @@ except Exception as e:
     st.warning(f"Conteo/Efectividad: {e}")
 
 # 5) Triple plot usando zona_inicio como rectangle_limits
-st.subheader("Triple plot de finalizaciones en zona seleccionada (usa Zona Inicio)")
+st.subheader("Análisis x zona de finalizaciones a partir de zona seleccionada (usa Zona Inicio)")
 if ss.zone_inicio:
     try:
         rect = (ss.zone_inicio["x0"], ss.zone_inicio["x1"], ss.zone_inicio["y0"], ss.zone_inicio["y1"])
@@ -402,7 +402,7 @@ if ss.zone_inicio:
     except Exception as e:
         st.warning(f"Triple plot por zona: {e}")
 else:
-    st.info("Para el triple plot, seleccioná primero una Zona de Inicio en el selector de zonas.")
+    st.info("Para el análisis por zona seleccioná primero una Zona de Inicio en el selector de zonas.")
 
 st.divider()
 
@@ -410,7 +410,9 @@ st.divider()
 st.subheader("Situaciones principales")
 st.caption(f"Filas resultantes: {len(df_scope)} de {len(df)}")
 if not df_scope.empty and "xg_corrected" in df_scope.columns:
-    st.dataframe(df_scope.sort_values(by="xg_corrected", ascending=False), use_container_width=True, hide_index=True)
+    col_to_show = ['TeamName','TeamRival','fecha','Competencia','Temporada','minute','second',
+                   'jugador', 'ultimo_event_name','cross_tipo','cross_pie','xA','xT','xg_corrected','Chipped','Keypass']
+    st.dataframe(df_scope[col_to_show].sort_values(by="xg_corrected", ascending=False), use_container_width=True, hide_index=True)
 else:
     st.dataframe(df_scope, use_container_width=True, hide_index=True)
 
