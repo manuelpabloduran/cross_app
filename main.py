@@ -317,6 +317,81 @@ def apply_zone_filters(df: pd.DataFrame, zi: dict | None, zf: dict | None):
             filt = filt[filt["endX"].between(zf["x0"], zf["x1"]) & filt["endY"].between(zf["y0"], zf["y1"])]
     return filt
 
+# ---------- métricas para grilla 4x3 ----------
+
+def _num_series(df: pd.DataFrame, candidates: list[str]) -> pd.Series:
+    """Devuelve la primera columna existente de 'candidates' convertida a numérico (NaN→0)."""
+    for c in candidates:
+        if c in df.columns:
+            return pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+    # si no hay ninguna, devolvemos una serie de ceros para no romper agregaciones
+    return pd.Series([0.0] * len(df), index=df.index)
+
+def render_metric_grid(df_scope: pd.DataFrame):
+    """Calcula y muestra 12 métricas en grilla 4x3 usando df_scope."""
+    n = len(df_scope)
+
+    # columnas que pueden variar de nombre en tus datos
+    col_tipo   = "cross_tipo" if "cross_tipo" in df_scope.columns else ("cross_type" if "cross_type" in df_scope.columns else None)
+    col_chip   = "Chipped" if "Chipped" in df_scope.columns else None
+    col_out    = "outcome_type" if "outcome_type" in df_scope.columns else None
+    col_shot   = "shot_related" if "shot_related" in df_scope.columns else None
+    col_goal   = "ultimo_event_name" if "ultimo_event_name" in df_scope.columns else None
+
+    # xG y xGOT (tomamos el primer nombre que exista)
+    xg  = _num_series(df_scope, ["xG_corr_max", "xg_corr_max", "xg_corrected"])
+    xgot = _num_series(df_scope, ["xGoT_corr_max", "xGOT_corr_max", "xgot_corrected"])
+
+    # contadores básicos
+    n_air  = int((pd.to_numeric(df_scope[col_chip], errors="coerce") == 1).sum()) if col_chip else 0
+    n_low  = int((pd.to_numeric(df_scope[col_chip], errors="coerce") == 0).sum()) if col_chip else 0
+
+    # porcentajes seguros
+    def pct(mask: pd.Series) -> float:
+        if n == 0: return 0.0
+        return 100.0 * float(mask.sum()) / n
+
+    p_abiertos   = pct((df_scope[col_tipo] == "Abierto"))     if col_tipo else 0.0
+    p_cerrados   = pct((df_scope[col_tipo] == "Cerrado"))     if col_tipo else 0.0
+    p_success    = pct((df_scope[col_out]  == "Successful"))  if col_out  else 0.0
+    p_shot       = pct((df_scope[col_shot] == "Shot Related"))if col_shot else 0.0
+    p_goal       = pct((df_scope[col_goal] == "Goal"))        if col_goal else 0.0
+
+    # xG/xGOT agregados
+    xg_sum,   xg_avg   = float(xg.sum()),   (float(xg.mean())   if n else 0.0)
+    xgot_sum, xgot_avg = float(xgot.sum()), (float(xgot.mean()) if n else 0.0)
+
+    # definimos las 12 métricas (título, valor, formato)
+    metrics = [
+        ("Total de centros",              n,         "int"),
+        ("Total de centros Aéreos",       n_air,     "int"),
+        ("Total de centros Rasos",        n_low,     "int"),
+        ("% Abiertos",                    p_abiertos,"pct"),
+        ("% Cerrados",                    p_cerrados,"pct"),
+        ("% Successful",                  p_success, "pct"),
+        ("% Shot Related",                p_shot,    "pct"),
+        ("% Terminan en Goal",            p_goal,    "pct"),
+        ("xG acumulado",                  xg_sum,    "2f"),
+        ("xG promedio",                   xg_avg,    "2f"),
+        ("xGOT acumulado",                xgot_sum,  "2f"),
+        ("xGOT promedio",                 xgot_avg,  "2f"),
+    ]
+
+    # Helper de formateo
+    def fmt_val(v, kind):
+        if kind == "int": return f"{int(v)}"
+        if kind == "pct": return f"{v:.1f}%"
+        if kind == "2f":  return f"{v:.2f}"
+        return str(v)
+
+    # pintamos 4 métricas por fila
+    for i in range(0, len(metrics), 4):
+        cols = st.columns(4)
+        for col, (label, value, kind) in zip(cols, metrics[i:i+4]):
+            with col:
+                st.metric(label, fmt_val(value, kind))
+
+
 # ===================== UI =====================
 
 st.title("Análisis de Centros")
@@ -365,6 +440,11 @@ tab_general, tab_equipos, tab_lanzadores = st.tabs(
 
 # ---- Tab 1: lo que ya tenías (muevo tus gráficos aquí) ----
 with tab_general:
+    st.subheader("Métricas generales")
+    render_metric_grid(df_scope)
+    st.divider()
+
+
     st.subheader("Análisis Gráfico")
 
     # 1) Funnel
