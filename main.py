@@ -356,97 +356,172 @@ st.divider()
 df_after_general = apply_general_filters(df, selections)
 df_scope = apply_zone_filters(df_after_general, ss.zone_inicio, ss.zone_final)
 
-st.subheader("Análisis Gráfico")
-
-# 1) Funnel (Plotly)
-try:
-    fig_funnel = funnel_por_tipo(df_scope, open_label="Abierto", closed_label="Cerrado")
-    st.plotly_chart(fig_funnel, use_container_width=True)
-except Exception as e:
-    st.warning(f"Funnel: {e}")
-
-# 2) Trayectorias por resultado (dos paneles con alpha según Variable de interés)
-st.markdown("##### Trayectorias por resultado")
-
-# Opciones disponibles según columnas presentes
-candidate_vars = ["xA", "xT", "xg_corrected"]
-available_vars = [c for c in candidate_vars if c in df_scope.columns]
-
-if len(available_vars) == 0:
-    st.info("No encontré columnas para ponderar alpha (xA, xT o xg_corrected). Se usará opacidad uniforme.")
-    selected_weight = None
-else:
-    default_var = "xA" if "xA" in available_vars else available_vars[0]
-    selected_weight = st.selectbox(
-        "Variable de interés",
-        available_vars,
-        index=available_vars.index(st.session_state.get("sel_weight_col", default_var))
-            if st.session_state.get("sel_weight_col", default_var) in available_vars
-            else available_vars.index(default_var),
-        key="sel_weight_col",
-        help="Elegí qué variable pondera la opacidad de las flechas en los centros exitosos."
-    )
-
-# Límite de flechas por panel (aplica a ambos)
-max_default = min(3000, len(df_scope)) if len(df_scope) > 0 else 1000
-upper_bound = max(100, min(10000, len(df_scope))) if len(df_scope) > 0 else 100
-max_n = st.slider(
-    "Máximo de flechas por panel",
-    min_value=100, max_value=max(100, upper_bound),
-    value=max_default if max_default >= 100 else 100,
-    step=100,
-    help="Aplica a ambos paneles: en Exitosos mantiene el Top N por la variable elegida; en No Exitosos toma los primeros N."
+# === Tabs con análisis adicionales que respetan df_scope ===
+tab_general, tab_equipos, tab_lanzadores = st.tabs(
+    ["Análisis General", "Rendimiento Equipos", "Rendimiento Lanzadores"]
 )
 
-try:
-    from chart_cross import trayectorias_split_por_resultado
-    fig_tray2 = trayectorias_split_por_resultado(
-        df_scope,
-        weight_col=selected_weight if selected_weight else "xg_corrected",  # fallback
-        alpha_min=0.06,
-        alpha_max=0.70,
-        alpha_unsuccess=0.10,
-        max_arrows=max_n,
-    )
-    st.pyplot(fig_tray2, use_container_width=True)
-except Exception as e:
-    st.warning(f"Trayectorias (split): {e}")
+# ---- Tab 1: lo que ya tenías (muevo tus gráficos aquí) ----
+with tab_general:
+    st.subheader("Análisis Gráfico")
 
-
-
-
-# 3) Heatmap+Flow triptych (mplsoccer)
-try:
-    fig_trip = heatmap_flow_triptych(df_scope)
-    st.pyplot(fig_trip, use_container_width=True)
-except Exception as e:
-    st.warning(f"Heatmap/Flow: {e}")
-
-# 4) Conteo y % efectividad por zona (mplsoccer)
-try:
-    fig_ce = heatmap_count_effectiveness(df_scope)
-    st.pyplot(fig_ce, use_container_width=True)
-except Exception as e:
-    st.warning(f"Conteo/Efectividad: {e}")
-
-# 5) Triple plot usando zona_inicio como rectangle_limits
-st.subheader("Análisis x zona de finalizaciones a partir de zona seleccionada (usa Zona Inicio)")
-if ss.zone_inicio:
+    # 1) Funnel
     try:
-        rect = (ss.zone_inicio["x0"], ss.zone_inicio["x1"], ss.zone_inicio["y0"], ss.zone_inicio["y1"])
-        fig_tz = triple_plot_by_zone(
-            df=df_scope,
-            zone_name="Centro desde zona seleccionada",
-            rectangle_limits=rect,
-            title="",
-            modo="sum",
-            bin_size=3
-        )
-        st.pyplot(fig_tz, use_container_width=True)
+        fig_funnel = funnel_por_tipo(df_scope, open_label="Abierto", closed_label="Cerrado")
+        st.plotly_chart(fig_funnel, use_container_width=True)
     except Exception as e:
-        st.warning(f"Triple plot por zona: {e}")
-else:
-    st.info("Para el análisis por zona seleccioná primero una Zona de Inicio en el selector de zonas.")
+        st.warning(f"Funnel: {e}")
+
+    # 2) Trayectorias split con variable de interés + N máx
+    st.markdown("##### Trayectorias por resultado")
+
+    candidate_vars = ["xA", "xT", "xg_corrected"]
+    available_vars = [c for c in candidate_vars if c in df_scope.columns]
+    if len(available_vars) == 0:
+        st.info("No encontré columnas para ponderar alpha (xA, xT o xg_corrected). Se usará opacidad uniforme.")
+        selected_weight = None
+    else:
+        default_var = "xA" if "xA" in available_vars else available_vars[0]
+        selected_weight = st.selectbox(
+            "Variable de interés",
+            available_vars,
+            index=available_vars.index(st.session_state.get("sel_weight_col", default_var))
+                if st.session_state.get("sel_weight_col", default_var) in available_vars
+                else available_vars.index(default_var),
+            key="sel_weight_col",
+            help="Pondera la opacidad de las flechas en Exitosos."
+        )
+
+    max_default = min(3000, len(df_scope)) if len(df_scope) > 0 else 1000
+    upper_bound = max(100, min(10000, len(df_scope))) if len(df_scope) > 0 else 100
+    max_n = st.slider(
+        "Máximo de flechas por panel",
+        min_value=100, max_value=max(100, upper_bound),
+        value=max_default if max_default >= 100 else 100,
+        step=100,
+        help="En Exitosos: Top N por variable. En No Exitosos: primeros N."
+    )
+
+    try:
+        fig_tray2 = trayectorias_split_por_resultado(
+            df_scope,
+            weight_col=selected_weight if selected_weight else "xg_corrected",
+            alpha_min=0.06, alpha_max=0.70, alpha_unsuccess=0.10,
+            max_arrows=max_n,
+        )
+        st.pyplot(fig_tray2, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Trayectorias (split): {e}")
+
+    # 3) Heatmap+Flow
+    try:
+        fig_trip = heatmap_flow_triptych(df_scope)
+        st.pyplot(fig_trip, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Heatmap/Flow: {e}")
+
+    # 4) Conteo y % efectividad por zona
+    try:
+        fig_ce = heatmap_count_effectiveness(df_scope)
+        st.pyplot(fig_ce, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Conteo/Efectividad: {e}")
+
+    # 5) Triple plot por zona seleccionada
+    st.subheader("Análisis x zona de finalizaciones a partir de zona seleccionada (usa Zona Inicio)")
+    if ss.zone_inicio:
+        try:
+            rect = (ss.zone_inicio["x0"], ss.zone_inicio["x1"], ss.zone_inicio["y0"], ss.zone_inicio["y1"])
+            fig_tz = triple_plot_by_zone(
+                df=df_scope, zone_name="Centro desde zona seleccionada",
+                rectangle_limits=rect, title="", modo="sum", bin_size=3
+            )
+            st.pyplot(fig_tz, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Triple plot por zona: {e}")
+    else:
+        st.info("Para el análisis por zona seleccioná primero una Zona de Inicio en el selector de zonas.")
+
+# ---- Tab 2: Rendimiento Equipos ----
+with tab_equipos:
+    st.subheader("Rendimiento por Equipo")
+    if df_scope.empty or "TeamName" not in df_scope.columns:
+        st.info("No hay datos o falta la columna TeamName.")
+    else:
+        # métricas base
+        base = df_scope.copy()
+        base["is_success"] = (base["outcome_type"] == "Successful") if "outcome_type" in base.columns else False
+        base["is_goal"]    = (base["ultimo_event_name"] == "Goal")   if "ultimo_event_name" in base.columns else False
+
+        g = base.groupby("TeamName", dropna=False)
+        df_team = g.size().rename("total").to_frame()
+        df_team["success"] = g["is_success"].sum()
+        df_team["success_rate"] = np.where(df_team["total"] > 0, df_team["success"] / df_team["total"], 0.0)
+        if "xA" in base.columns: df_team["xA_sum"] = g["xA"].sum()
+        if "xT" in base.columns: df_team["xT_sum"] = g["xT"].sum()
+        if "xg_corrected" in base.columns:
+            df_team["xg_sum"] = g["xg_corrected"].sum()
+            df_team["xg_avg"] = g["xg_corrected"].mean()
+        df_team["goals"] = g["is_goal"].sum()
+
+        df_team = df_team.sort_values(["success_rate","total"], ascending=[False, False])
+
+        st.dataframe(df_team.reset_index(), use_container_width=True)
+
+        # gráfico rápido: tasa de éxito por equipo (top 15)
+        try:
+            import plotly.express as px
+            top = df_team.sort_values("total", ascending=False).head(15).reset_index()
+            fig_eq = px.bar(
+                top, x="TeamName", y="success_rate",
+                hover_data=["total","success","goals","xA_sum","xT_sum","xg_sum","xg_avg"] if "xg_sum" in top.columns else ["total","success","goals","xA_sum","xT_sum"],
+            )
+            fig_eq.update_layout(yaxis_tickformat=".0%", title="Tasa de éxito (top 15 por volumen)", paper_bgcolor="white", plot_bgcolor="white")
+            st.plotly_chart(fig_eq, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Gráfico equipos: {e}")
+
+# ---- Tab 3: Rendimiento Lanzadores ----
+with tab_lanzadores:
+    st.subheader("Rendimiento por Lanzador")
+    # usa 'jugador' si existe; si no, intenta 'player'/'player_name'
+    player_col = next((c for c in ["jugador","player","player_name"] if c in df_scope.columns), None)
+    if df_scope.empty or not player_col:
+        st.info("No hay datos o falta la columna de jugador (jugador/player).")
+    else:
+        base = df_scope.copy()
+        base["is_success"] = (base["outcome_type"] == "Successful") if "outcome_type" in base.columns else False
+        base["is_goal"]    = (base["ultimo_event_name"] == "Goal")   if "ultimo_event_name" in base.columns else False
+
+        g = base.groupby(player_col, dropna=False)
+        df_pl = g.size().rename("total").to_frame()
+        df_pl["success"] = g["is_success"].sum()
+        df_pl["success_rate"] = np.where(df_pl["total"] > 0, df_pl["success"] / df_pl["total"], 0.0)
+        if "xA" in base.columns: df_pl["xA_sum"] = g["xA"].sum()
+        if "xT" in base.columns: df_pl["xT_sum"] = g["xT"].sum()
+        if "xg_corrected" in base.columns:
+            df_pl["xg_sum"] = g["xg_corrected"].sum()
+            df_pl["xg_avg"] = g["xg_corrected"].mean()
+        df_pl["goals"] = g["is_goal"].sum()
+
+        df_pl = df_pl.sort_values(["total","success_rate"], ascending=[False, False])
+
+        st.dataframe(df_pl.reset_index().rename(columns={player_col:"Jugador"}), use_container_width=True)
+
+        # gráfico rápido: top lanzadores por total (top 15)
+        try:
+            import plotly.express as px
+            top = df_pl.sort_values("total", ascending=False).head(15).reset_index()
+            top = top.rename(columns={player_col:"Jugador"})
+            fig_pl = px.bar(
+                top, x="Jugador", y="total",
+                hover_data=["success","success_rate","goals","xA_sum","xT_sum","xg_sum","xg_avg"] if "xg_sum" in top.columns else ["success","success_rate","goals","xA_sum","xT_sum"],
+            )
+            fig_pl.update_layout(title="Volumen de centros por lanzador (top 15)", paper_bgcolor="white", plot_bgcolor="white")
+            st.plotly_chart(fig_pl, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Gráfico lanzadores: {e}")
+
 
 st.divider()
 
