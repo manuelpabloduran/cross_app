@@ -16,7 +16,7 @@ from chart_cross import (
     heatmap_count_effectiveness,
     triple_plot_by_zone,
     heatmap_pct_shot_by_zone,
-    heatmap_pct_goal_by_zone,
+    heatmap_pct_goal_by_zone
 )
 
 
