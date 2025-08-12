@@ -12,11 +12,12 @@ import numpy as np
 
 from chart_cross import (
     funnel_por_tipo,
-    trayectorias_por_resultado,
+    trayectorias_split_por_resultado,   # ← añade esta
     heatmap_flow_triptych,
     heatmap_count_effectiveness,
     triple_plot_by_zone,
 )
+
 
 st.set_page_config(page_title="Análisis de Centros • Filtros + Zonas", page_icon="⚽", layout="wide")
 
@@ -364,12 +365,42 @@ try:
 except Exception as e:
     st.warning(f"Funnel: {e}")
 
-# 2) Trayectorias por resultado (mplsoccer)
+# 2) Trayectorias por resultado (dos paneles con alpha según Variable de interés)
+st.markdown("##### Trayectorias por resultado")
+# opciones disponibles según columnas presentes en el DF filtrado
+candidate_vars = ["xA", "xT", "xg_corrected"]
+available_vars = [c for c in candidate_vars if c in df_scope.columns]
+
+if len(available_vars) == 0:
+    st.info("No encontré columnas para ponderar alpha (xA, xT o xg_corrected). Se usará opacidad uniforme.")
+    selected_weight = None
+else:
+    # valor por defecto persistente en la sesión (prioriza xA si existe)
+    default_var = "xA" if "xA" in available_vars else available_vars[0]
+    selected_weight = st.selectbox(
+        "Variable de interés (alpha ∝ valor)",
+        available_vars,
+        index=available_vars.index(st.session_state.get("sel_weight_col", default_var))
+            if st.session_state.get("sel_weight_col", default_var) in available_vars
+            else available_vars.index(default_var),
+        key="sel_weight_col",
+        help="Elegí qué variable pondera la opacidad de las flechas en los centros exitosos."
+    )
+
 try:
-    fig_tray = trayectorias_por_resultado(df_scope)
-    st.pyplot(fig_tray, use_container_width=True)
+    fig_tray2 = trayectorias_split_por_resultado(
+        df_scope,
+        weight_col=selected_weight if selected_weight else "xg_corrected",  # fallback
+        alpha_min=0.06,
+        alpha_max=0.70,
+        alpha_unsuccess=0.10,
+        max_success_arrows=100,  # opcional si tenés MUCHOS eventos
+    )
+    st.pyplot(fig_tray2, use_container_width=True)
 except Exception as e:
-    st.warning(f"Trayectorias: {e}")
+    st.warning(f"Trayectorias (split): {e}")
+
+
 
 # 3) Heatmap+Flow triptych (mplsoccer)
 try:

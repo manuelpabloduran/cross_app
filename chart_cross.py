@@ -355,3 +355,95 @@ def triple_plot_by_zone(
     fig.subplots_adjust(wspace=0.1, left=0.03, right=0.97, top=0.85, bottom=0.05)
     plt.suptitle(f'{zone_name} - {title}', color='black', fontsize=16)
     return fig
+
+# -------------------------------------------------------------
+# 6) Trayectorias divididas por resultado (mplsoccer)
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from mplsoccer import Pitch
+
+def trayectorias_split_por_resultado(
+    df: pd.DataFrame,
+    x_col='x', y_col='y', end_x_col='endX', end_y_col='endY',
+    outcome_col='outcome_type',
+    weight_col='xA',          # <- columna a usar para alpha en Successful
+    alpha_min=0.06,           # <- alpha mínimo para flechas con xA bajo
+    alpha_max=0.70,           # <- alpha máximo para xA alto
+    alpha_unsuccess=0.10,     # <- alpha uniforme para Unsuccessful
+    figsize=(16, 6),
+    max_success_arrows=None,  # p.ej. 3000 si querés limitar por performance
+):
+    """
+    Dibuja dos paneles lado a lado:
+      - Izq: outcome_type == 'Successful' (verde) con alpha ~ weight_col (xA)
+      - Der: outcome_type == 'Unsuccessful' (rojo) con alpha fijo
+
+    Si `weight_col` no existe o no tiene datos, cae en alpha uniforme.
+    Fondo blanco y textos negros (no transparente).
+    """
+    pitch = Pitch(pitch_type='opta', pitch_color='white', line_color='black')
+    fig, axs = plt.subplots(1, 2, figsize=figsize, constrained_layout=True)
+
+    # fondo sólido
+    fig.patch.set_facecolor("white")
+    fig.patch.set_alpha(1.0)
+    for ax in axs:
+        ax.set_facecolor("white")
+
+    # -----------------------
+    # Panel Successful (izq)
+    # -----------------------
+    ax_succ = axs[0]
+    pitch.draw(ax=ax_succ, tight_layout=False)
+    ax_succ.set_title("Trayectorias - Exitosos (alpha ~ xA)", fontsize=14, color="black")
+
+    succ = df[df[outcome_col] == 'Successful'] if outcome_col in df.columns else df.iloc[0:0]
+    if not succ.empty:
+        # ¿tenemos columna de peso?
+        use_weight = weight_col in succ.columns
+        if use_weight:
+            w = pd.to_numeric(succ[weight_col], errors='coerce').fillna(0.0).astype(float)
+            wmin, wmax = float(w.min()), float(w.max())
+            # evitar división por 0
+            rng = (wmax - wmin) if (wmax - wmin) > 1e-12 else 1.0
+            alphas = alpha_min + ( (w - wmin) / rng ) * (alpha_max - alpha_min)
+        else:
+            alphas = pd.Series(alpha_max, index=succ.index)
+
+        # (opcional) limitar cantidad por performance
+        if max_success_arrows is not None and len(succ) > max_success_arrows:
+            # muestreamos priorizando alphas más altos (xA alto)
+            take_idx = alphas.sort_values(ascending=False).head(max_success_arrows).index
+            succ = succ.loc[take_idx]
+            alphas = alphas.loc[take_idx]
+
+        # Dibujo flecha a flecha para poder variar alpha
+        # (orden: primero las más transparentes, luego las más opacas)
+        order = np.argsort(alphas.values)
+        xs = succ[x_col].values
+        ys = succ[y_col].values
+        xe = succ[end_x_col].values
+        ye = succ[end_y_col].values
+        a  = alphas.values
+
+        for i in order:
+            pitch.arrows(xs[i], ys[i], xe[i], ye[i],
+                         color='green', ax=ax_succ, alpha=float(a[i]), width=1.5)
+
+    # --------------------------
+    # Panel Unsuccessful (der)
+    # --------------------------
+    ax_fail = axs[1]
+    pitch.draw(ax=ax_fail, tight_layout=False)
+    ax_fail.set_title("Trayectorias - No Exitosos", fontsize=14, color="black")
+
+    fail = df[df[outcome_col] == 'Unsuccessful'] if outcome_col in df.columns else df.iloc[0:0]
+    if not fail.empty:
+        pitch.arrows(
+            fail[x_col], fail[y_col], fail[end_x_col], fail[end_y_col],
+            color='red', ax=ax_fail, alpha=alpha_unsuccess, width=1.5
+        )
+
+    return fig
